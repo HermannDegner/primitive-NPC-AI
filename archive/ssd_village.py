@@ -2,6 +2,7 @@
 """
 SSD Village Simulation - Clean Version
 構造主観力学(SSD)理論に基づく原始村落シミュレーション
+https://github.com/HermannDegner/Structural-Subjectivity-Dynamics
 
 主要機能:
 - SSD理論統合（未処理圧E、跳躍メカニズム、柔軟復帰条件）
