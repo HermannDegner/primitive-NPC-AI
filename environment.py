@@ -272,13 +272,27 @@ class Predator:
 
 
 class Environment:
-    """環境とリソース管理（エコシステム対応）"""
-    def __init__(self, size=90, n_berry=120, n_hunt=60, n_water=40, n_caves=25):
+    """環境とリソース管理（エコシステム対応 + スマート環境統合）"""
+    def __init__(self, size=90, n_berry=120, n_hunt=60, n_water=40, n_caves=25, enable_smart_world=True):
         self.size = size
         self.weather = Weather()
         self.day_night = DayNightCycle()
         self.predators = []
         self.prey_animals = []  # 獲物動物のリスト
+        
+        # スマート環境システムの統合
+        self.enable_smart_world = enable_smart_world
+        if enable_smart_world:
+            try:
+                from smart_environment import SmartEnvironment
+                self.smart_env = SmartEnvironment(size)
+                print("Smart Environment System が有効化されました")
+            except ImportError:
+                print("Smart Environment System が見つかりません。従来モードで実行します。")
+                self.enable_smart_world = False
+                self.smart_env = None
+        else:
+            self.smart_env = None
         
         # リソース生成
         self.water_sources = {f"water_{i}": (random.randint(5, size-5), random.randint(5, size-5)) 
@@ -292,6 +306,9 @@ class Environment:
         
         # 獲物動物の初期生成
         self._spawn_initial_prey()
+        
+        # 4層SSD統合のための環境フィードバックシステム
+        self.environmental_feedback_history = []
         
     def step(self):
         """環境の1ステップ更新"""
@@ -329,9 +346,25 @@ class Environment:
                 self.prey_animals.append(Prey(x, y, animal_type))
     
     def ecosystem_step(self, npcs, current_tick):
-        """エコシステム全体の1ステップ更新"""
+        """エコシステム全体の1ステップ更新（4層SSD統合 + スマート環境）"""
         # 既存の環境ステップ
         self.step()
+        
+        # スマート環境システムとの統合
+        if self.smart_env:
+            # NPCの活動分析と環境への影響評価
+            self.smart_env.analyze_npc_impact(npcs, current_tick)
+            
+            # 各NPCに環境フィードバックを提供
+            self._provide_smart_environmental_feedback(npcs, current_tick)
+            
+            # 世界状態を記録
+            world_intelligence = self.smart_env.get_intelligence_summary()
+            self.environmental_feedback_history.append({
+                'tick': current_tick,
+                'intelligence': world_intelligence,
+                'npc_count': len([npc for npc in npcs if npc.alive])
+            })
         
         # 獲物動物の更新
         humans = [npc for npc in npcs if npc.alive]
@@ -349,6 +382,36 @@ class Environment:
         
         # 狩場競合の処理
         self._process_hunting_competition(humans, current_tick)
+    
+    def _provide_smart_environmental_feedback(self, npcs, current_tick):
+        """スマート環境システムからのフィードバックをNPCの4層構造に提供"""
+        for npc in npcs:
+            if not npc.alive:
+                continue
+            
+            # スマート環境からフィードバック取得
+            feedback = self.smart_env.provide_npc_environmental_feedback(npc, current_tick)
+            
+            # NPCの4層物理構造システムにフィードバック提供
+            if hasattr(npc, 'physical_system') and npc.physical_system:
+                
+                # 物理層への環境制約更新
+                if hasattr(npc.physical_system.physical_layer, 'update_environmental_constraints'):
+                    npc.physical_system.physical_layer.update_environmental_constraints(feedback)
+                else:
+                    # フォールバック: 環境制約を直接設定
+                    if not hasattr(npc.physical_system.physical_layer, 'environmental_constraints'):
+                        npc.physical_system.physical_layer.environmental_constraints = {}
+                    npc.physical_system.physical_layer.environmental_constraints.update(feedback)
+                
+                # 上層構造への適応機会提供
+                if hasattr(npc.physical_system.upper_layer, 'receive_environmental_feedback'):
+                    npc.physical_system.upper_layer.receive_environmental_feedback(feedback)
+                else:
+                    # フォールバック: 環境適応情報を直接設定
+                    if not hasattr(npc.physical_system.upper_layer, 'environmental_adaptation_data'):
+                        npc.physical_system.upper_layer.environmental_adaptation_data = {}
+                    npc.physical_system.upper_layer.environmental_adaptation_data.update(feedback)
     
     def _natural_prey_spawning(self):
         """獲物動物の自然繁殖"""
@@ -402,3 +465,65 @@ class Environment:
                     for node_pos in nodes_dict.values()]
         distances.sort(key=lambda x: x[1])
         return [pos for pos, _ in distances[:k]]
+    
+    def get_world_intelligence_summary(self):
+        """統合された世界知性のサマリー取得"""
+        summary = {
+            'static_resources': {
+                'water_sources': len(self.water_sources),
+                'berry_patches': len(self.berries),
+                'hunting_grounds': len(self.hunting_grounds),
+                'caves': len(self.caves)
+            },
+            'dynamic_entities': {
+                'predators': len([p for p in self.predators if p.alive]),
+                'prey_animals': len([p for p in self.prey_animals if p.alive])
+            },
+            'environmental_conditions': {
+                'weather': self.weather.condition,
+                'temperature': self.weather.temperature,
+                'time_of_day': self.day_night.time_of_day,
+                'is_night': self.day_night.is_night()
+            }
+        }
+        
+        # スマート環境システムからの知性情報追加
+        if self.smart_env:
+            smart_summary = self.smart_env.get_intelligence_summary()
+            summary['environmental_intelligence'] = smart_summary
+            
+            # 環境の学習状況
+            summary['learning_metrics'] = {
+                'adaptation_memory': len(self.smart_env.adaptation_memory),
+                'learning_progress': smart_summary.get('learning_capacity', 0.0),
+                'environmental_health': smart_summary.get('biodiversity_level', 1.0)
+            }
+        
+        return summary
+    
+    def get_environmental_pressure_for_location(self, location):
+        """指定位置の環境圧力を取得（4層SSD統合用）"""
+        if self.smart_env:
+            return self.smart_env.generate_environmental_pressure(location)
+        else:
+            # フォールバック: 従来の環境圧力計算
+            pressure = 0.0
+            
+            # 天候による圧力
+            if self.weather.condition == "storm":
+                pressure += 0.5
+            elif self.weather.condition == "rain":
+                pressure += 0.2
+            
+            # 夜間による圧力
+            if self.day_night.is_night():
+                pressure += 0.3
+            
+            # 捕食者による圧力
+            for predator in self.predators:
+                if predator.alive:
+                    distance = math.sqrt((location[0] - predator.x)**2 + (location[1] - predator.y)**2)
+                    if distance < 20:
+                        pressure += 0.4 * (1.0 - distance / 20.0)
+            
+            return min(1.0, pressure)
