@@ -25,10 +25,10 @@ if __name__ == "__main__":
         print()
         
         # シミュレーション実行
-        final_npcs, df_logs, df_weather = run_simulation(ticks=500)
+        final_npcs, df_logs, df_weather, df_ecosystem = run_simulation(ticks=500)
         
         # 結果分析
-        analyze_results(final_npcs, df_logs, df_weather)
+        analyze_results(final_npcs, df_logs, df_weather, df_ecosystem)
         
     except ImportError as e:
         print(f"モジュールインポートエラー: {e}")
