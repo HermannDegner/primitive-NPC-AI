@@ -64,7 +64,6 @@ class Predator:
         self.active = False
         self.duration = 0
         self.max_duration = 30
-        # --- PATCH 2-1: Add camping state ---
         self.camp_ticks = 0
         self.camping_node = None
         self.camp_radius = 2
@@ -98,7 +97,6 @@ class Predator:
             self.x = max(0, min(self.env.size-1, self.x))
             self.y = max(0, min(self.env.size-1, self.y))
 
-        # --- PATCH 2-1: Camping detection logic ---
         nodes = list(self.env.huntzones.keys())
         if nodes:
             near = min(nodes, key=lambda p: abs(p[0]-self.x)+abs(p[1]-self.y))
@@ -123,7 +121,8 @@ class Predator:
 # Environment
 # =========================
 class EnvForageBuff:
-    def __init__(self, size=40, n_berry=18, n_hunt=10):
+    # --- 水場・言語要素の追加 ---
+    def __init__(self, size=40, n_berry=18, n_hunt=10, n_water=5):
         self.size = size
         self.berries = {}
         for _ in range(n_berry):
@@ -133,8 +132,16 @@ class EnvForageBuff:
         for _ in range(n_hunt):
             x, y = random.randrange(size), random.randrange(size)
             self.huntzones[(x, y)] = {"base_success": random.uniform(0.20, 0.50), "danger": random.uniform(0.25, 0.65)}
+        
+        # --- 水場・言語要素の追加：水場を環境に追加 ---
+        self.water_sources = {}
+        for _ in range(n_water):
+            x, y = random.randrange(size), random.randrange(size)
+            self.water_sources[(x,y)] = {"quality": random.uniform(0.5, 1.0)}
+
         self.t = 0
         self.day_night = DayNightCycle(day_length=48)
+        
     def step(self):
         for v in self.berries.values():
             v["abundance"] = min(1.0, v["abundance"] + v["regen"] * (1.0 - v["abundance"]))
@@ -142,10 +149,13 @@ class EnvForageBuff:
             v["base_success"] = float(np.clip(v["base_success"] + np.random.normal(0, 0.01), 0.03, 0.8))
         self.t += 1
         self.day_night.step()
+        
     def nearest_nodes(self, pos, node_dict, k=4):
         nodes = list(node_dict.keys())
+        if not nodes: return []
         nodes.sort(key=lambda p: abs(p[0] - pos[0]) + abs(p[1] - pos[1]))
         return nodes[:k]
+        
     def forage(self, pos, node):
         abundance = self.berries[node]["abundance"]
         dist = abs(pos[0] - node[0]) + abs(pos[1] - node[1])
@@ -181,7 +191,11 @@ class NPCWithTerritory:
                  horizon=8, horizon_rally=6, rally_ttl=10):
         self.name = name; self.env = env; self.roster_ref = roster_ref
         self.x, self.y = start_pos
-        self.hunger = 50.0; self.fatigue = 30.0; self.injury = 0.0
+        
+        # --- 水場・言語要素の追加：「渇き」と「水」の属性を追加 ---
+        self.hunger = 50.0; self.thirst = 30.0; self.fatigue = 30.0; self.injury = 0.0
+        self.water = 5.0 
+
         self.alive = True; self.state = "Awake"
         self.kappa = defaultdict(lambda: 0.1); self.kappa_min = 0.05
         self.E = 0.0; self.T = 0.3
@@ -192,7 +206,10 @@ class NPCWithTerritory:
         p = preset
         self.risk_tolerance = p["risk_tolerance"]; self.curiosity = p["curiosity"]
         self.avoidance = p["avoidance"]; self.stamina = p["stamina"]; self.empathy = p.get("empathy",0.6)
-        self.TH_H = 55.0
+        
+        # --- 水場・言語要素の追加：「渇き」の閾値を追加 ---
+        self.TH_H = 55.0; self.TH_T = 60.0 # Thirst threshold
+
         self.rel = defaultdict(float); self.help_debt = defaultdict(float)
         self.sleep_debt = 0.0; self.is_sleeping = False; self.sleep_duration = 0
         self.total_sleep_time = 0; self.sleep_cycles = 0
@@ -212,17 +229,21 @@ class NPCWithTerritory:
         self.cohesion = 0.0
         self.village_affinity = 0.0
         self.last_social_tick = 0
-        # --- PATCH 1-1: Add alignment inertia fields ---
         self.align_inertia = 0.0
         self.align_streak  = 0
         self.align_decay   = 0.004
-        # --- PATCH 2-2: Extend rally_state ---
         self.rally_state = { "leader": None, "ttl": 0, "node": None, "min_k": 2, "kind": "hunt"}
-        # --- Fields for combat_power ---
         self.combat_power_base = 2.0 + (self.risk_tolerance * 2.0) + (self.stamina * 1.0)
         self.combat_xp = 0.0
 
-    # --- PATCH 1-1: Add alignment inertia methods ---
+        # --- 水場・言語要素の追加：知識（構造）として水場の場所を記憶 ---
+        self.knowledge_water = set()
+        # 初期知識として最も近い水場を１つ知っている
+        initial_water = self.env.nearest_nodes(self.pos(), self.env.water_sources, k=1)
+        if initial_water:
+            self.knowledge_water.add(initial_water[0])
+
+
     def update_alignment_inertia(self, action_type, meaning_pressure, processed_amount, success):
         eps = 1e-6
         eff = processed_amount / max(meaning_pressure, eps) if meaning_pressure > 0 else 0.0
@@ -238,7 +259,6 @@ class NPCWithTerritory:
     def decay_alignment_inertia(self):
         self.align_inertia = max(0.0, self.align_inertia - self.align_decay)
 
-    # --- PATCH 1-2: Add combat_power method ---
     def combat_power(self, group_bonus=0.0):
         k = self.kappa.get("hunt", 0.1)
         xp_term = 1.0 + 0.15*np.tanh(self.combat_xp/30.0)
@@ -246,14 +266,13 @@ class NPCWithTerritory:
         injury_pen  = 1.0 - 0.50*(self.injury /120.0)
         inertia_boost = 1.0 + 0.25*self.align_inertia
         return max(0.1,
-            (self.combat_power_base * (1.0 + 0.25*k) * xp_term * fatigue_pen * injury_pen * inertia_boost)
-            * (1.0 + group_bonus)
+                   (self.combat_power_base * (1.0 + 0.25*k) * xp_term * fatigue_pen * injury_pen * inertia_boost)
+                   * (1.0 + group_bonus)
         )
 
     def gain_combat_xp(self, amount):
         self.combat_xp += amount
 
-    # --- Other methods (utils, alignment/heat, sleep, territory, etc.) ---
     def pos(self): return (self.x, self.y)
     def dist_to(self, o): return abs(self.x - o.x) + abs(self.y - o.y)
     def move_towards(self, target):
@@ -279,7 +298,7 @@ class NPCWithTerritory:
         if self.sleep_debt > 150: return True
         if self.fatigue > 90: return True
         if self.env.day_night.is_night() and self.fatigue > 60: return True
-        if self.get_personal_sleep_pressure() > 0.7 and self.hunger < 85: return True
+        if self.get_personal_sleep_pressure() > 0.7 and self.hunger < 85 and self.thirst < 85: return True
         return False
     def enter_sleep(self, t): self.is_sleeping = True; self.sleep_duration = 0; self.state = "Sleeping"; self.sleep_cycles += 1
     def consolidate_memory(self):
@@ -310,7 +329,6 @@ class NPCWithTerritory:
         return max(0, min(1.0, threat))
     def react_to_intruder(self, intruder, t):
         threat, other = intruder["threat_level"], intruder["npc"]
-        # Simplified reactions from previous code
         if threat < 0.3 and self.empathy > 0.7 and random.random() < 0.3: return "invited"
         elif threat < 0.6: return "warned"
         else: return "chased" if self.territorial_aggression > other.territorial_aggression else "retreated"
@@ -363,9 +381,28 @@ class NPCWithTerritory:
         return False
     def forecast_hunger(self, t_now, horizon): return min(120.0, self.hunger + 1.8 * horizon)
 
-# =========================
-# Rally, Social, and Priority Agent Classes (Integrated)
-# =========================
+    # --- 水場・言語要素の追加：水場情報共有のメソッド ---
+    def share_water_knowledge(self, t):
+        # 自分の知っている水場情報を近くの仲間に教える
+        if not self.knowledge_water:
+            return
+        
+        shared_info = False
+        for ally in self.nearby_allies(radius=3):
+            # 自分が知っていて、相手が知らない情報を探す
+            new_info_for_ally = self.knowledge_water - ally.knowledge_water
+            if new_info_for_ally:
+                info_to_share = random.choice(list(new_info_for_ally))
+                ally.knowledge_water.add(info_to_share)
+                self.rel[ally.name] = min(1.0, self.rel[ally.name] + 0.05)
+                ally.rel[self.name] = min(1.0, ally.rel[self.name] + 0.03)
+                shared_info = True
+                self.log.append({"t": t, "name": self.name, "action": "share_water_info", "target": ally.name, "info": info_to_share})
+        
+        if shared_info:
+            self.update_kappa("social", True, 5.0)
+
+
 class NPCPriority(NPCWithTerritory):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -373,7 +410,6 @@ class NPCPriority(NPCWithTerritory):
         self.store_fraction  = 0.6
         self.rally_target = None
 
-    # --- PATCH 2-2: Add predator rally methods ---
     def emit_rally_predator(self, t, node, min_k=3, ttl=12):
         self.rally_state = {"leader": self.name, "ttl": ttl, "node": node, "min_k": min_k, "kind": "predator"}
         self.log.append({"t": t, "name": self.name, "action": "rally_predator_hunt", "node": node})
@@ -409,7 +445,6 @@ class NPCPriority(NPCWithTerritory):
                 if rem > 0: m.food_store = min(m.max_store, m.food_store + 0.6*rem)
                 m.gain_combat_xp(6.0 + 3.0*predator.strength)
                 m.update_kappa("hunt", True, 0.8*share)
-                # PATCH 1-3: Update alignment inertia
                 m.update_alignment_inertia("predator", 1.0, 0.9, True)
             for i in range(k):
                 for j in range(i+1, k):
@@ -421,7 +456,6 @@ class NPCPriority(NPCWithTerritory):
                 if random.random() < inj_prob: m.injury = min(120, m.injury + random.uniform(8, 25))
                 m.gain_combat_xp(2.0 + 1.0*predator.strength)
                 m.update_kappa("hunt", False, 0)
-                # PATCH 1-3: Update alignment inertia
                 m.update_alignment_inertia("predator", 1.0, 0.0, False)
             self.log.append({"t": t, "name": self.name, "action": "predator_slay_failure", "party": [m.name for m in party]})
         for m in party:
@@ -437,7 +471,6 @@ class NPCPriority(NPCWithTerritory):
         for ally in self.nearby_allies(radius=8):
             rs = getattr(ally, "rally_state", None)
             if rs and rs.get("leader") == ally.name and rs.get("ttl",0) > 0:
-                # --- PATCH 2-2: Add threat bonus ---
                 rally_kind = rs.get("kind", "hunt")
                 threat_bonus = 0.35 if rally_kind == "predator" else 0.0
                 need_pressure = max(0.0, (self.hunger - self.TH_H) / (100 - self.TH_H))
@@ -458,8 +491,7 @@ class NPCPriority(NPCWithTerritory):
         nodes = self.env.nearest_nodes(self.pos(), self.env.huntzones, k=1)
         if not nodes: return False;
         node = nodes[0]
-        # Simplified logic from previous version
-        success = random.random() < 0.8  # Assume group hunts are generally successful
+        success = random.random() < 0.8
         total_food = 100 if success else 0
         shares = [total_food / len(party)] * len(party)
         for m, share in zip(party, shares):
@@ -467,12 +499,10 @@ class NPCPriority(NPCWithTerritory):
                 before = m.hunger; m.hunger = max(0.0, m.hunger - share)
                 rem = max(0.0, share - (before - m.hunger)); m.food_store = min(m.max_store, m.food_store + rem * 0.6)
                 m.update_kappa("hunt", True, share)
-                # PATCH 1-3
                 meaning_p = max(0.0, (m.hunger - m.TH_H) / (100 - m.TH_H)); processed = min(1.0, 0.6 + 0.4*np.tanh(share/60.0))
                 m.update_alignment_inertia("hunt", meaning_p, processed, True)
             else:
                 m.update_kappa("hunt", False, 0)
-                # PATCH 1-3
                 meaning_p = max(0.0, (m.hunger - m.TH_H) / (100 - m.TH_H))
                 m.update_alignment_inertia("hunt", meaning_p, 0.0, False)
             if getattr(m, "rally_target", None) == self.name: m.rally_target = None; m.state = "Awake"
@@ -498,14 +528,26 @@ class NPCPriority(NPCWithTerritory):
         if random.random() < 0.25: self.move_towards(best.pos()); return True
         return False
 
-    # --- Priority-based Step Function ---
     def step(self, t, predator=None):
         if not self.alive: return
+        
+        # --- 状態更新フェーズ ---
+        # 欲求の増加
+        self.hunger += 1.0
+        self.thirst += 1.5 # 渇きは空腹より速く進行
+        self.fatigue += 1.0 * self.env.day_night.get_activity_cost_multiplier()
+        self.sleep_debt += 0.8
+
         self.update_territory_center(); self.detect_intruders(t)
         if any(self.react_to_intruder(i, t) in ["chased", "retreated"] for i in self.detected_intruders): return
-        if self.hunger >= 100 or self.injury >= 100:
-            self.alive = False; self.log.append({"t": t, "name": self.name, "action": "death", "cause": "hunger" if self.hunger>=100 else "injury"})
+        
+        # 死亡判定
+        if self.hunger >= 120 or self.injury >= 120 or self.thirst >= 120:
+            cause = "hunger" if self.hunger >= 120 else "injury" if self.injury >= 120 else "thirst"
+            self.alive = False; self.log.append({"t": t, "name": self.name, "action": "death", "cause": cause})
             return
+
+        # 睡眠中の処理
         if self.is_sleeping:
             self.sleep_duration += 1; self.total_sleep_time += 1
             recovery = 6.0 * (1.5 if self.env.day_night.is_night() else 1.0)
@@ -514,18 +556,39 @@ class NPCPriority(NPCWithTerritory):
             if self.sleep_duration > 5: self.consolidate_memory()
             if self.fatigue < 30 and self.env.day_night.is_day(): self.wake_up(t, "natural")
             return
+        
+        # --- 意思決定フェーズ（優先度順） ---
 
-        # L1: Hard Guardrails
+        # L0: 危機回避
+        if self.detect_predator(predator, t) == "fled": return
+
+        # L1: 緊急の生理的欲求（Hard Guardrails）
+        if self.thirst >= 95:
+             # 水を飲むか、水場へ移動する
+            if self.water > 0:
+                self.water -= 1.0; self.thirst = max(0, self.thirst - 60)
+                self.log.append({"t": t, "name": self.name, "action": "drink_carried_water"})
+                return
+            else:
+                target_water = self.env.nearest_nodes(self.pos(), {k:v for k,v in self.env.water_sources.items() if k in self.knowledge_water}, k=1)
+                if target_water:
+                    target = target_water[0]
+                    if self.pos() == target:
+                        self.thirst = max(0, self.thirst - 80); self.water = 10.0
+                        self.log.append({"t": t, "name": self.name, "action": "drink_at_source", "node": target})
+                    else:
+                        self.move_towards(target)
+                        self.log.append({"t": t, "name": self.name, "action": "move_to_water", "node": target})
+                    return
         if self.hunger >= 95:
-            # simplified forage
+            # 食料を探す（簡略化）
             nodes = self.env.nearest_nodes(self.pos(), self.env.berries, k=1)
             if nodes: self.move_towards(nodes[0]); self.env.forage(self.pos(), nodes[0]); return
         if self.injury >= 85 or self.fatigue >= 95 or self.should_sleep():
             self.move_towards(self.territory.center); self.enter_sleep(t); return
 
-        # L2: Cooperative Context
+        # L2: 協調行動（Cooperative Context）
         if self.state == "rallying": self.move_towards(self.roster_ref[self.rally_target].pos()); return
-        # --- PATCH 2-3 & 2-4: Predator and Hunt Rally Logic ---
         if predator and predator.is_camping() and not self.is_sleeping and self.fatigue < 80:
             self.emit_rally_predator(t, predator.camping_node, min_k=3, ttl=12)
         if self.rally_state["leader"] == self.name and self.rally_state["ttl"] > 0:
@@ -537,23 +600,50 @@ class NPCPriority(NPCWithTerritory):
             self.emit_rally_for_hunt(t)
         if self.consider_join_rally(t): return
 
-        # L3: Individual Needs
+        # L3: 個人の欲求充足（Individual Needs）
+        if self.thirst > self.TH_T:
+            # L1と同様のロジックだが、より探索的
+            if self.water > 0:
+                self.water -= 1.0; self.thirst = max(0, self.thirst - 60)
+                self.log.append({"t": t, "name": self.name, "action": "drink_carried_water"})
+            else:
+                # 知識ベースまたは探索
+                known_sources = {k:v for k,v in self.env.water_sources.items() if k in self.knowledge_water}
+                target_water = self.env.nearest_nodes(self.pos(), known_sources, k=1)
+                if target_water:
+                     target = target_water[0]
+                     if self.pos() == target:
+                         self.thirst = max(0, self.thirst - 80); self.water = 10.0
+                         self.log.append({"t": t, "name": self.name, "action": "drink_at_source", "node": target})
+                     else:
+                         self.move_towards(target)
+                         self.log.append({"t": t, "name": self.name, "action": "move_to_water", "node": target})
+                else: # 知識がない場合、ランダムウォークで探索
+                    self.x += random.choice([-1, 0, 1]); self.y += random.choice([-1, 0, 1])
+                    self.log.append({"t": t, "name": self.name, "action": "explore_for_water"})
+                    # 発見判定
+                    found = self.env.nearest_nodes(self.pos(), self.env.water_sources, k=1)
+                    if found and self.dist_to(found[0]) <= 1:
+                        self.knowledge_water.add(found[0])
+                        self.log.append({"t": t, "name": self.name, "action": "discover_water_source", "node": found[0]})
+
+            return # 水関連の行動をしたらターン終了
+        
         if self.hunger > self.TH_H:
-             nodes = self.env.nearest_nodes(self.pos(), self.env.berries, k=1)
-             if nodes:
-                 self.move_towards(nodes[0])
-                 success, food, _, _ = self.env.forage(self.pos(), nodes[0])
-                 if success: self.hunger -= food
-                 # PATCH 1-3
-                 meaning_p = (self.hunger - self.TH_H) / 45.0; processed = food / 30.0 if success else 0
-                 self.update_alignment_inertia("forage", meaning_p, processed, success)
-                 return
+            nodes = self.env.nearest_nodes(self.pos(), self.env.berries, k=1)
+            if nodes:
+                self.move_towards(nodes[0])
+                success, food, _, _ = self.env.forage(self.pos(), nodes[0])
+                if success: self.hunger -= food
+                meaning_p = (self.hunger - self.TH_H) / 45.0; processed = food / 30.0 if success else 0
+                self.update_alignment_inertia("forage", meaning_p, processed, success)
+                return
         if self.maybe_help_territorial(t, predator): return
 
-        # L4: Social & Patrol
+        # L4: 社会的行動と巡回（Social & Patrol）
         self.social_gravity_move(); self.copresence_tick(); self.apply_triadic_closure()
+        self.share_water_knowledge(t) # <<< 言語による情報共有
         if random.random() < 0.5: self.move_towards(self.territory.center)
-        # PATCH 1-3
         self.decay_alignment_inertia()
 
 
@@ -575,7 +665,7 @@ COLLECTOR = {"risk_tolerance": 0.4, "curiosity": 0.7, "avoidance": 0.6, "stamina
 # Main Execution
 # =========================
 def run_sim(TICKS=400, predator_spawn_interval=80):
-    env = EnvForageBuff(size=40, n_berry=18, n_hunt=10)
+    env = EnvForageBuff(size=40, n_berry=18, n_hunt=10, n_water=5)
     roster = {}
     npc_configs = [
         ("Forager_A", FORAGER, (15, 15)), ("Tracker_B", TRACKER, (25, 15)),
@@ -585,24 +675,47 @@ def run_sim(TICKS=400, predator_spawn_interval=80):
         ("Aggressor_I", AGGRESSOR, (10, 30)), ("Collector_J", COLLECTOR, (30, 10)),
         ("Forager_K", FORAGER, (15, 30)), ("Pioneer_L", PIONEER, (25, 25)),
     ]
-    # 【修正版】正しいインスタンス化
     npcs = [NPCPriority(name, preset, env, roster, pos) for name, preset, pos in npc_configs]
     for npc in npcs: roster[npc.name] = npc
     predator = Predator(env, strength=3.0)
+    
+    logs = []
     for t in range(TICKS):
         if t > 0 and t % predator_spawn_interval == 0 and not predator.active:
             predator.spawn(t)
         predator.step()
+        
+        # --- 水場・言語要素の追加：ログ収集を改善 ---
+        current_tick_logs = []
         for n in npcs:
             if n.alive:
-                n.detect_predator(predator, t)
                 n.step(t, predator)
+                if n.log:
+                    current_tick_logs.extend(n.log)
+                    n.log = [] # ログをクリア
+        
+        if current_tick_logs:
+            logs.extend(current_tick_logs)
+            
         env.step()
-    return npcs, pd.concat([pd.DataFrame(n.log) for n in npcs], ignore_index=True)
+        
+        # 生存者がいなくなったら終了
+        if not any(n.alive for n in npcs):
+            print(f"--- {t} tick: 全員が力尽きた ---")
+            break
+
+    return npcs, pd.DataFrame(logs)
 
 if __name__ == "__main__":
     final_npcs, df_logs = run_sim()
-    # Basic analysis
+    print("\n--- Simulation Finished ---")
     print(f"Survivors: {sum(1 for n in final_npcs if n.alive)} / {len(final_npcs)}")
-    pred_hunts = df_logs[df_logs['action'].str.contains("predator_slay")]
-    print(f"Predator Hunts: {len(pred_hunts)} ({len(pred_hunts[pred_hunts['action'] == 'predator_slay_success'])} success)")
+    
+    if not df_logs.empty:
+        pred_hunts = df_logs[df_logs['action'].str.contains("predator_slay")]
+        if not pred_hunts.empty:
+            print(f"Predator Hunts: {len(pred_hunts)} ({len(pred_hunts[pred_hunts['action'] == 'predator_slay_success'])} success)")
+        
+        water_shares = df_logs[df_logs['action'] == 'share_water_info']
+        if not water_shares.empty:
+            print(f"Water source info shared {len(water_shares)} times.")
