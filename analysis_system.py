@@ -63,10 +63,17 @@ def analyze_enhanced_results(roster, ssd_logs, env_intelligence_logs, seasonal_l
     df_env = pd.DataFrame(env_intelligence_logs)
     if not df_env.empty:
         print(f"\\nEnvironmental Response Analysis:")
-        avg_env_pressure = df_env['environmental_pressure'].mean()
-        avg_resource_scarcity = df_env['resource_scarcity'].mean()
-        print(f"  Avg environmental pressure: {avg_env_pressure:.3f}")
-        print(f"  Avg resource scarcity: {avg_resource_scarcity:.3f}")
+        # 利用可能なカラムをチェックして安全に処理
+        available_columns = df_env.columns.tolist()
+        print(f"  Available environment data: {', '.join(available_columns)}")
+        
+        if 'environmental_pressure' in df_env.columns:
+            avg_env_pressure = df_env['environmental_pressure'].mean()
+            print(f"  Avg environmental pressure: {avg_env_pressure:.3f}")
+        
+        if 'resource_scarcity' in df_env.columns:
+            avg_resource_scarcity = df_env['resource_scarcity'].mean()
+            print(f"  Avg resource scarcity: {avg_resource_scarcity:.3f}")
         
         # 高圧力状況の分析
         high_pressure_decisions = df_ssd[df_ssd['environmental_pressure'] > 0.5]
@@ -171,8 +178,11 @@ def analyze_survival_patterns(roster, seasonal_logs):
         print(f"  Total casualties: {len(dead_npcs)}")
         # 死亡者の特性も分析可能（必要に応じて追加）
 
-def generate_simulation_report(roster, ssd_logs, env_logs, seasonal_logs, simulation_params):
+def generate_simulation_report(roster, ssd_logs, env_logs, seasonal_logs, simulation_params=None):
     """包括的シミュレーションレポート生成"""
+    if simulation_params is None:
+        simulation_params = {'ticks': 400, 'npcs': len(roster), 'mode': 'seasonal'}
+    
     report = {
         'simulation_params': simulation_params,
         'survival_rate': len([npc for npc in roster.values() if npc.alive]) / len(roster),
