@@ -185,7 +185,7 @@ def generate_simulation_report(roster, ssd_logs, env_logs, seasonal_logs, simula
     
     report = {
         'simulation_params': simulation_params,
-        'survival_rate': len([npc for npc in roster.values() if npc.alive]) / len(roster),
+        'survival_rate': len([npc for npc in roster.values() if npc.alive]) / len(roster) if len(roster) > 0 else 0,
         'total_decisions': len(ssd_logs),
         'seasonal_cycles': len(set(log['season'] for log in seasonal_logs)) if seasonal_logs else 0,
         'boundary_formations': 0,  # 境界システムから取得

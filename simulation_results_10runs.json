@@ -1,0 +1,112 @@
+[
+  {
+    "run_id": 1,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:11.350376"
+  },
+  {
+    "run_id": 2,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:11.647401"
+  },
+  {
+    "run_id": 3,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:11.934547"
+  },
+  {
+    "run_id": 4,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:12.217868"
+  },
+  {
+    "run_id": 5,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:12.501193"
+  },
+  {
+    "run_id": 6,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:12.776175"
+  },
+  {
+    "run_id": 7,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:13.056814"
+  },
+  {
+    "run_id": 8,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:13.347548"
+  },
+  {
+    "run_id": 9,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:13.637285"
+  },
+  {
+    "run_id": 10,
+    "survivors": 0,
+    "total_npcs": 16,
+    "deaths": 16,
+    "survival_rate": 0.0,
+    "dehydration_deaths": 0,
+    "starvation_deaths": 0,
+    "output_length": 382,
+    "timestamp": "2025-10-02T11:54:13.923377"
+  }
+]

@@ -10,6 +10,7 @@ from collections import defaultdict
 from config import *
 from social import Territory
 from ssd_core import ExplorationModeManager
+from future_prediction import FuturePredictionEngine, ActionType
 from utils import distance_between, find_nearest_position, probability_check, log_event
 
 
@@ -47,11 +48,17 @@ class NPC:
         self.exploration_intensity = 1.0
         self.exploration_manager = ExplorationModeManager(self)
         
+        # 未来予測エンジンの初期化
+        self.future_engine = FuturePredictionEngine(self)
+        
         # 知識と記憶
         self.knowledge_caves = set()
         self.knowledge_water = set()
         self.knowledge_berries = set()
         self.knowledge_hunting = set()
+        
+        # 洞窟雨水システム関連
+        self.last_cave_water_check = 0  # 最後に洞窟水をチェックした時刻
         
         # 縄張りとコミュニティ
         self.territory = None
@@ -138,6 +145,26 @@ class NPC:
         # 移動距離を正規化
         distance = math.sqrt(dx**2 + dy**2)
         move_distance = min(2, distance)
+        
+        if distance > 0:
+            self.x += int(dx / distance * move_distance)
+            self.y += int(dy / distance * move_distance)
+            
+        self.x = max(0, min(self.env.size-1, self.x))
+        self.y = max(0, min(self.env.size-1, self.y))
+    
+    def move_towards_efficiently(self, target):
+        """効率的な移動（疲労時の緊急移動）"""
+        tx, ty = target
+        dx = tx - self.x
+        dy = ty - self.y
+        
+        if dx == 0 and dy == 0:
+            return
+            
+        # より大きなステップで移動（最大3歩）
+        distance = math.sqrt(dx**2 + dy**2)
+        move_distance = min(3, distance)  # 通常の1.5倍速
         
         if distance > 0:
             self.x += int(dx / distance * move_distance)
@@ -322,13 +349,16 @@ class NPC:
     def emergency_survival_action(self, t, life_crisis):
         """命の危機時の緊急行動"""
         if self.thirst > THIRST_DANGER_THRESHOLD:
+            print(f"🚨💧 T{t}: EMERGENCY WATER NEEDED - {self.name} thirst: {self.thirst:.1f}")
             known_water = {k: v for k, v in self.env.water_sources.items() if k in self.knowledge_water}
             if known_water:
                 nearest_water = self.env.nearest_nodes(self.pos(), known_water, k=1)
                 if nearest_water:
                     target = nearest_water[0]
                     if self.pos() == target:
+                        old_thirst = self.thirst
                         self.thirst = max(0, self.thirst - 45)
+                        print(f"🚑💧 T{t}: EMERGENCY WATER CONSUMED - {self.name} emergency drink, thirst: {old_thirst:.1f} → {self.thirst:.1f}")
                         log_event(self.log, {
                             "t": t, "name": self.name, "action": "emergency_drink", 
                             "recovery": 45, "life_crisis": life_crisis
@@ -361,15 +391,15 @@ class NPC:
         if not self.alive:
             return
         
-        # 基本的な劣化
+        # 基本的な劣化（疲労は上限制御）
         self.hunger += 1.5
         self.thirst += 2.0
-        self.fatigue += 1.0
+        self.fatigue = min(150.0, self.fatigue + 1.0)  # 疲労上限を150に設定
         
-        # 生存チェック
-        if self.thirst > 200 or self.hunger > 240:
+        # 生存チェック（バランス調整された生存条件）
+        if self.thirst > 180 or self.hunger > 200:
             self.alive = False
-            cause = "dehydration" if self.thirst > 200 else "starvation"
+            cause = "dehydration" if self.thirst > 180 else "starvation"
             log_event(self.log, {"t": t, "name": self.name, "action": "death", "cause": cause})
             return
         
@@ -387,6 +417,9 @@ class NPC:
         
         # 肉の在庫管理（腐敗チェック）
         self.manage_meat_inventory(t)
+        
+        # 肉の消費による空腹回復
+        self.consume_meat_if_hungry(t)
         
         # 肉の分配検討
         self.consider_meat_sharing(t)
@@ -423,46 +456,246 @@ class NPC:
             self.provide_care(t)
             return
         
-        # 通常行動の優先順位付け
-        if self.thirst > 80:
+        # 【未来予測エンジンによる統合的行動決定】
+        if hasattr(self, 'future_engine'):
+            recommended_action = self.future_engine.get_immediate_action_recommendation()
+            
+            if recommended_action:
+                self.execute_predicted_action(recommended_action, t)
+                return
+        
+        # フォールバック: 従来の優先順位ベース行動（未来予測統合版）
+        if self.thirst > 60:  # 未来予測に合わせて閾値を下げる
             self.seek_water(t)
-        elif self.hunger > 80:  # より低い閾値
-            # 狩りも食料獲得手段として検討
-            if self.consider_hunting(t):
-                # 集団狩りを優先的に試行
+        elif self.hunger > 40:  # 予測的協力：まだ余裕があるうちから協力を検討
+            # 将来の食料不足を予測して事前に協力
+            if self.consider_future_cooperation(t):
+                # 予測的集団狩りを優先的に試行
+                if not self.organize_predictive_group_hunt(t):
+                    # 通常の狩り判断にフォールバック
+                    if self.consider_hunting(t):
+                        if not self.attempt_solo_hunt(t):
+                            self.seek_food(t)
+                    else:
+                        self.seek_food(t)
+            elif self.consider_hunting(t):
+                # 従来の反応的狩り
                 if not self.organize_group_hunt(t):
-                    # 集団狩りが組織できない場合は単独狩り
                     if not self.attempt_solo_hunt(t):
-                        # 狩りに失敗した場合は従来の食料探索
                         self.seek_food(t)
             else:
                 self.seek_food(t)
         elif self.hunt_group and self.hunt_group.status == 'forming':
             # 狩りグループの実行
             self.execute_group_hunt(t)
-        elif self.fatigue > 70:  # より高い閾値で休息優先度調整
+        # 予測的疲労管理
+        should_rest, rest_type = self.consider_predictive_rest(t)
+        if should_rest:
             self.seek_rest(t)
         else:
-            # 狩りの機会検討（低優先度）
-            if self.consider_hunting(t) and self.hunger > 50:  # より低い閾値
-                if not self.organize_group_hunt(t):
-                    pass  # 通常行動に移行
+            # 予測的協力の機会検討（低優先度）
+            if self.hunger > 25:  # 非常に早い段階から協力を検討
+                if self.consider_strategic_cooperation(t):
+                    if not self.organize_predictive_group_hunt(t):
+                        pass  # 通常行動に移行
             self.explore_or_socialize(t)
     
+    def execute_predicted_action(self, action, t):
+        """予測されたアクションの実行"""
+        action_type = action.action_type
+        
+        # 予測エンジンのサマリーをログに記録
+        prediction_summary = self.future_engine.get_prediction_summary()
+        log_event(self.log, {
+            "t": t, "name": self.name, "action": "future_prediction_decision",
+            "recommended_action": action_type.value,
+            "urgency": action.urgency,
+            "rationale": prediction_summary["recommended_action"]["rationale"],
+            "survival_risk": prediction_summary["survival_risk_level"]
+        })
+        
+        # アクション実行
+        if action_type.value == "hunt":
+            self.execute_predictive_hunt(t)
+        elif action_type.value == "forage":
+            self.execute_predictive_forage(t)
+        elif action_type.value == "drink":
+            self.execute_predictive_drink(t)
+        elif action_type.value == "rest":
+            self.execute_predictive_rest(t)
+        elif action_type.value == "explore":
+            self.execute_predictive_explore(t)
+        elif action_type.value == "cooperate":
+            self.execute_predictive_cooperation(t)
+        else:
+            # 未対応のアクションはフォールバック
+            self.explore_or_socialize(t)
+    
+    def execute_predictive_hunt(self, t):
+        """予測的狩猟実行"""
+        # 協力可能性を先に評価
+        cooperation_potential = self.future_engine._assess_cooperation_potential()
+        
+        if cooperation_potential and self.organize_predictive_group_hunt(t):
+            log_event(self.log, {
+                "t": t, "name": self.name, "action": "predictive_group_hunt_organized"
+            })
+        else:
+            # ソロ狩猟
+            if hasattr(self, 'attempt_solo_hunt'):
+                self.attempt_solo_hunt(t)
+            else:
+                self.seek_food(t)
+            log_event(self.log, {
+                "t": t, "name": self.name, "action": "predictive_solo_hunt"
+            })
+    
+    def execute_predictive_forage(self, t):
+        """予測的採集実行"""
+        self.seek_food(t)
+        log_event(self.log, {
+            "t": t, "name": self.name, "action": "predictive_forage"
+        })
+    
+    def execute_predictive_drink(self, t):
+        """予測的水分補給実行"""
+        self.seek_water(t)
+        log_event(self.log, {
+            "t": t, "name": self.name, "action": "predictive_drink"
+        })
+    
+    def execute_predictive_rest(self, t):
+        """予測的休憩実行"""
+        self.seek_rest(t)
+        log_event(self.log, {
+            "t": t, "name": self.name, "action": "predictive_rest"
+        })
+    
+    def execute_predictive_explore(self, t):
+        """予測的探索実行"""
+        self.explore_for_resource(t, "any")
+        log_event(self.log, {
+            "t": t, "name": self.name, "action": "predictive_explore"
+        })
+    
+    def execute_predictive_cooperation(self, t):
+        """予測的協力実行"""
+        if self.organize_predictive_group_hunt(t):
+            log_event(self.log, {
+                "t": t, "name": self.name, "action": "predictive_cooperation_success"
+            })
+        else:
+            # 協力失敗時は次善策
+            self.execute_predictive_hunt(t)
+    
     def seek_water(self, t):
-        """水分補給行動"""
+        """水分補給行動（季節統合版 + 洞窟雨水）"""
+        print(f"💧 T{t}: WATER ATTEMPT - {self.name} thirst: {self.thirst:.1f}")
+        
+        # 1. 洞窟雨水を優先チェック（近い洞窟から）
+        if self._try_drink_cave_water(t):
+            return
+        
+        # 2. 通常の水源を探す
         known_water = {k: v for k, v in self.env.water_sources.items() if k in self.knowledge_water}
         if known_water:
             nearest_water = self.env.nearest_nodes(self.pos(), known_water, k=1)
             if nearest_water:
                 target = nearest_water[0]
                 if self.pos() == target:
-                    self.thirst = max(0, self.thirst - 35)
-                    log_event(self.log, {"t": t, "name": self.name, "action": "drink", "recovery": 35})
+                    old_thirst = self.thirst
+                    # 季節によって回復量を調整
+                    recovery_amount = 35
+                    if hasattr(self.env, 'seasonal_modifier'):
+                        temp_stress = self.env.seasonal_modifier.get('temperature_stress', 0.0)
+                        recovery_amount = max(30, 35 - (temp_stress * 10))  # 高温時は回復量減少
+                    
+                    self.thirst = max(0, self.thirst - recovery_amount)
+                    print(f"🚰 T{t}: WATER CONSUMED - {self.name} drank water, thirst: {old_thirst:.1f} → {self.thirst:.1f}")
+                    log_event(self.log, {"t": t, "name": self.name, "action": "drink", "recovery": recovery_amount})
                 else:
                     self.move_towards(target)
         else:
+            # 水源不明時はより積極的に探索
             self.explore_for_resource(t, "water")
+            # 緊急時は他のNPCの知識も参照
+            if self.thirst > 100:
+                self._request_water_location_info(t)
+    
+    def _request_water_location_info(self, t):
+        """緊急時の水源情報共有"""
+        if not self.roster:
+            return
+        
+        for other_name, other_npc in self.roster.items():
+            if other_name != self.name and other_npc.alive:
+                # 近くのNPCから水源情報を取得
+                if self.distance_to(other_npc) < 20 and other_npc.knowledge_water:
+                    shared_water = list(other_npc.knowledge_water)[:1]  # 1つだけ共有
+                    for water_pos in shared_water:
+                        if water_pos not in self.knowledge_water:
+                            self.knowledge_water.add(water_pos)
+                            print(f"💡 T{t}: {other_name} shared water location with {self.name}")
+                            break
+    
+    def _try_drink_cave_water(self, t):
+        """洞窟雨水を飲む試み"""
+        if not hasattr(self.env, 'cave_water_storage'):
+            return False
+        
+        # 現在位置の洞窟をチェック
+        current_pos = self.pos()
+        for cave_id, cave_pos in self.env.caves.items():
+            if current_pos == cave_pos:
+                # 洞窟の水情報を取得
+                water_info = self.env.get_cave_water_info(cave_id)
+                if water_info and water_info['water_amount'] > 0:
+                    old_thirst = self.thirst
+                    recovery_amount = min(35, water_info['water_amount'])
+                    
+                    # 季節によって回復量を調整
+                    if hasattr(self.env, 'seasonal_modifier'):
+                        temp_stress = self.env.seasonal_modifier.get('temperature_stress', 0.0)
+                        recovery_amount = max(20, recovery_amount - (temp_stress * 5))
+                    
+                    # 洞窟の水を飲む
+                    actual_recovery = self.env.drink_cave_water(cave_id, self.name, recovery_amount)
+                    if actual_recovery > 0:
+                        self.thirst = max(0, self.thirst - actual_recovery)
+                        log_event(self.log, {
+                            "t": t, "name": self.name, "action": "drink_cave_water", 
+                            "cave_id": cave_id, "recovery": actual_recovery
+                        })
+                        return True
+                else:
+                    print(f"🏞️🚫 {self.name} found empty cave {cave_id} at {cave_pos}")
+        
+        # 現在位置に洞窟がない場合、近くの水のある洞窟を探す
+        return self._seek_nearby_cave_with_water(t)
+    
+    def _seek_nearby_cave_with_water(self, t):
+        """近くの水のある洞窟を探す"""
+        if not hasattr(self.env, 'cave_water_storage'):
+            return False
+        
+        caves_with_water = []
+        for cave_id, cave_pos in self.env.caves.items():
+            water_info = self.env.get_cave_water_info(cave_id)
+            if water_info and water_info['water_amount'] > 5:  # 5以上の水がある洞窟
+                distance = ((self.x - cave_pos[0])**2 + (self.y - cave_pos[1])**2)**0.5
+                caves_with_water.append((cave_id, cave_pos, distance, water_info['water_amount']))
+        
+        if caves_with_water:
+            # 最も近い水のある洞窟に移動
+            caves_with_water.sort(key=lambda x: x[2])  # 距離でソート
+            target_cave_id, target_pos, distance, water_amount = caves_with_water[0]
+            
+            if distance <= 15:  # 15マス以内の洞窟のみ対象
+                print(f"🏞️💧 T{t}: {self.name} seeking cave water at {target_cave_id} {target_pos} (water: {water_amount:.1f})")
+                self.move_towards(target_pos)
+                return True
+        
+        return False
     
     def seek_food(self, t):
         """食料探索行動"""
@@ -481,9 +714,84 @@ class NPC:
         else:
             self.explore_for_resource(t, "food")
     
+    def consider_predictive_rest(self, t):
+        """未来予測的な休憩判断"""
+        # 現在の疲労と活動予測に基づく休憩判断
+        current_fatigue = self.fatigue
+        
+        # 未来の疲労予測（今後の行動コストを考慮）
+        predicted_activities = self.predict_next_activities()
+        predicted_fatigue_cost = sum(activity['cost'] for activity in predicted_activities)
+        future_fatigue = current_fatigue + predicted_fatigue_cost
+        
+        # 洞窟までの距離による移動コスト
+        known_caves = {k: v for k, v in self.env.caves.items() if k in self.knowledge_caves}
+        if known_caves:
+            nearest_cave = min(known_caves.values(), key=lambda pos: self.distance_to(pos))
+            travel_cost = self.distance_to(nearest_cave) * 1.5  # 移動疲労係数
+        else:
+            travel_cost = 20  # 洞窟探索コスト
+        
+        # 予測的休憩条件
+        rest_threshold = 50  # より早い段階で休憩を検討
+        emergency_threshold = 100  # 緊急休憩レベル
+        
+        # 予測疲労が危険レベルに達する場合、予防的休憩
+        if future_fatigue + travel_cost > emergency_threshold:
+            return True, "preventive"
+        # 現在疲労が中程度で、今後の活動で危険になる場合
+        elif current_fatigue > rest_threshold and future_fatigue > 80:
+            return True, "strategic"
+        # 緊急時（従来の反応的休憩）
+        elif current_fatigue > 70:
+            return True, "reactive"
+            
+        return False, "none"
+    
+    def predict_next_activities(self):
+        """今後の活動とそのコストを予測"""
+        activities = []
+        
+        # 空腹状態に基づく狩猟予測
+        if self.hunger > 40:
+            activities.append({"action": "hunt", "cost": 25})
+        elif self.hunger > 20:
+            activities.append({"action": "forage", "cost": 15})
+            
+        # 喉の渇きに基づく水探し予測
+        if self.thirst > 30:
+            activities.append({"action": "seek_water", "cost": 10})
+            
+        # 探索モードの予測
+        if self.exploration_mode:
+            activities.append({"action": "explore", "cost": 12})
+            
+        # 協力活動の予測
+        if self.consider_cooperation_readiness():
+            activities.append({"action": "cooperation", "cost": 20})
+            
+        return activities
+    
+    def consider_cooperation_readiness(self):
+        """協力活動への参加準備状況"""
+        return (self.fatigue < 100 and self.hunger > 25 and 
+                len([npc for npc in self.roster.values() 
+                     if npc.alive and self.distance_to(npc.pos()) <= 60]) >= 1)
+
     def seek_rest(self, t):
         """休息行動"""
         known_caves = {k: v for k, v in self.env.caves.items() if k in self.knowledge_caves}
+        
+        # 予測的休憩判断
+        should_rest, rest_type = self.consider_predictive_rest(t)
+        
+        # デバッグログ追加
+        log_event(self.log, {
+            "t": t, "name": self.name, "action": "seek_rest_attempt", 
+            "fatigue": self.fatigue, "known_caves": len(known_caves),
+            "pos": self.pos(), "rest_type": rest_type
+        })
+        
         if known_caves:
             # 安全感に基づく洞窟選択
             cave_safety = {}
@@ -517,8 +825,18 @@ class NPC:
                         "recovery": total_recovery, "safety_feeling": safety_feeling
                     })
                 else:
-                    self.move_towards(best_cave)
+                    # 疲労レベルに応じた移動速度調整
+                    if self.fatigue > 100:
+                        # 緊急時は直線的に素早く移動
+                        self.move_towards_efficiently(best_cave)
+                    else:
+                        self.move_towards(best_cave)
         else:
+            # 洞窟を知らない場合のログ
+            log_event(self.log, {
+                "t": t, "name": self.name, "action": "explore_for_shelter", 
+                "fatigue": self.fatigue, "reason": "no_known_caves"
+            })
             self.explore_for_resource(t, "shelter")
     
     def explore_for_resource(self, t, resource_type):
@@ -547,7 +865,10 @@ class NPC:
     
     def discover_nearby_resources(self, t, target_type):
         """近くのリソースを発見"""
-        discovery_radius = 5
+        # 疲労時の発見半径拡大 - 緊急時のリソース発見促進
+        base_radius = 15  # 基本半径を5から15に拡大
+        fatigue_bonus = max(0, (self.fatigue - 70) * 0.3)  # 疲労70超過時にボーナス半径
+        discovery_radius = base_radius + fatigue_bonus
         discovered = False
         
         # 水源の発見
@@ -652,7 +973,77 @@ class NPC:
         
 
         
-        return hunting_desire > 0.3  # 適正な狩り閾値
+        return hunting_desire > 0.05  # 0.2 → 0.05 に大幅に下げて群れ狩り促進
+    
+    def consider_future_cooperation(self, t):
+        """将来の資源不足を予測した協力判断（予測的協力）"""
+        
+        # 現在の資源状況の分析
+        if hasattr(self, 'meat_inventory') and self.meat_inventory:
+            if isinstance(self.meat_inventory, dict):
+                current_meat = sum(self.meat_inventory.values())
+            else:
+                current_meat = sum(self.meat_inventory) if isinstance(self.meat_inventory, list) else 0
+        else:
+            current_meat = 0
+        predicted_survival_days = current_meat / 2.0 if current_meat > 0 else 0
+        
+        # 将来の困窮予測
+        cooperation_urgency = 0.0
+        
+        # 肉の在庫が少ない場合の予測的協力
+        if current_meat < 5.0:  # 2.5日分以下
+            cooperation_urgency += 0.6
+            
+        # 飢餓の進行予測（現在の飢餓レベルから将来を予測）
+        if self.hunger > 30:  # まだ余裕があるが将来を見据えて
+            hunger_trend = (self.hunger - 20) / 60  # 0-1の範囲で正規化
+            cooperation_urgency += hunger_trend * 0.4
+            
+        # 社会性の高いNPCは協力に積極的
+        cooperation_urgency += self.sociability * 0.3
+        
+        # 過去の協力成功経験
+        coop_success = self.experience.get('group_hunting', 0)
+        cooperation_urgency += coop_success * 0.2
+        
+        # 環境のリスク予測（季節変化など）
+        if hasattr(self.env, 'seasonal_modifier'):
+            seasonal_risk = 1.0 - self.env.seasonal_modifier.get('prey_availability', 1.0)
+            cooperation_urgency += seasonal_risk * 0.3
+            
+        print(f"  🔮 T{t}: FUTURE COOPERATION - {self.name} predicts cooperation urgency: {cooperation_urgency:.2f}")
+        
+        return cooperation_urgency > 0.4  # 予測的協力の閾値
+    
+    def consider_strategic_cooperation(self, t):
+        """戦略的協力判断（まだ困っていないが将来に備える）"""
+        
+        strategic_value = 0.0
+        
+        # リーダーシップのあるNPCは積極的に協力を組織
+        if hasattr(self, 'leadership'):
+            strategic_value += self.leadership * 0.4
+        
+        # 社会性による戦略的判断
+        strategic_value += self.sociability * 0.5
+        
+        # 周囲の仲間の状況を観察
+        nearby_npcs = [npc for npc in self.roster.values() 
+                      if npc != self and npc.alive and self.distance_to(npc.pos()) <= 30]
+        
+        if nearby_npcs:
+            avg_hunger = sum(npc.hunger for npc in nearby_npcs) / len(nearby_npcs)
+            if avg_hunger > 40:  # 周囲が困り始めている
+                strategic_value += 0.3
+                
+        # 経験豊富なNPCは戦略的に協力を判断
+        hunting_exp = self.experience.get('hunting', 0)
+        strategic_value += hunting_exp * 0.2
+        
+        print(f"  🎯 T{t}: STRATEGIC COOPERATION - {self.name} strategic value: {strategic_value:.2f}")
+        
+        return strategic_value > 0.3  # 戦略的協力の閾値
     
     def calculate_hunting_confidence(self):
         """狩りの自信レベルを計算（経験値統合）"""
@@ -676,10 +1067,11 @@ class NPC:
         from social import MeatResource
         
         self.last_hunt_attempt = t
+        print(f"  🏹 T{t}: HUNT ATTEMPT - {self.name} trying solo hunt...")
         
-        # 疲労コスト
+        # 疲労コスト（上限制御）
         hunt_cost = HUNTING_SETTINGS['hunt_fatigue_cost']
-        self.fatigue += hunt_cost
+        self.fatigue = min(150.0, self.fatigue + hunt_cost)
         
         # 成功判定
         confidence = self.calculate_hunting_confidence()
@@ -697,6 +1089,7 @@ class NPC:
             meat = MeatResource(meat_amount, owner=self.name)
             meat.creation_tick = t
             self.meat_inventory.append(meat)
+            print(f"  🎯 T{t}: SOLO HUNT SUCCESS - {self.name} caught {prey_type}, gained {meat_amount} meat!")
             
             # 経験値更新
             self.hunt_success_count += 1
@@ -725,7 +1118,7 @@ class NPC:
         critical_injury = False
         if probability_check(injury_rate):
             injury_damage = random.randint(5, 15) if not hunt_successful else random.randint(3, 12)
-            self.fatigue += injury_damage
+            self.fatigue = min(150.0, self.fatigue + injury_damage)  # 疲労上限制御
             injured = True
             
             # 重症判定
@@ -762,16 +1155,28 @@ class NPC:
         # 既にグループに参加している場合はスキップ
         if self.hunt_group:
             return False
-            
-        # 近くの仲間を探す
-        potential_members = [
-            npc for npc in self.roster.values()
-            if npc != self and npc.alive and npc.hunt_group is None
-            and self.distance_to(npc.pos()) <= 15
-            and npc.fatigue < 60  # 疲労していない
-        ]
         
-        if len(potential_members) >= 2:  # 最低3人（自分含む）で組織
+        print(f"  🤝 T{t}: GROUP HUNT ATTEMPT - {self.name} trying to organize group hunt...")
+            
+        # 近くの仲間を探す - デバッグ版
+        all_npcs = [npc for npc in self.roster.values() if npc != self and npc.alive]
+        print(f"    🔍 DEBUG: Checking {len(all_npcs)} alive NPCs for group formation")
+        
+        potential_members = []
+        for npc in all_npcs:
+            distance = self.distance_to(npc.pos())
+            print(f"      - {npc.name}: distance={distance:.1f}, hunt_group={npc.hunt_group}, fatigue={npc.fatigue:.1f}")
+            
+            if (npc.hunt_group is None and distance <= 60 and npc.fatigue < 151):
+                potential_members.append(npc)
+                print(f"        ✅ ELIGIBLE for group hunt")
+            else:
+                print(f"        ❌ NOT ELIGIBLE: hunt_group={npc.hunt_group}, distance={distance:.1f} (≤25?), fatigue={npc.fatigue:.1f} (<120?)")
+        
+        print(f"    👥 Found {len(potential_members)} potential members within range 60")
+        
+        if len(potential_members) >= 1:  # 最低2人（自分含む）で組織
+            print(f"    ✅ Enough members for group hunt! Creating group...")
             # 狩りグループ作成
             hunt_group = HuntGroup(leader=self, target_prey_type='medium_game')
             hunt_group.formation_tick = t
@@ -796,6 +1201,7 @@ class NPC:
             if hunt_group.can_start_hunt():
                 self.hunt_group = hunt_group
                 
+                print(f"  🎯 T{t}: GROUP HUNT FORMED - {self.name} organized group with {len(hunt_group.members)} members: {[m.name for m in hunt_group.members]}")
                 log_event(self.log, {
                     "t": t, "name": self.name, "action": "organize_hunt_group",
                     "members": [m.name for m in hunt_group.members],
@@ -803,8 +1209,111 @@ class NPC:
                 })
                 
                 return True
+            else:
+                print(f"    ❌ Group hunt failed: not enough recruited members ({recruited})")
+        else:
+            print(f"    ❌ Not enough potential members: {len(potential_members)} (need 1+, range: 60, fatigue<151)")
         
         return False
+    
+    def organize_predictive_group_hunt(self, t):
+        """予測的グループハンティングの組織（将来に備えた協力）"""
+        from social import HuntGroup
+        from config import HUNTING_SETTINGS
+        
+        # 既にグループに参加している場合はスキップ
+        if self.hunt_group:
+            return False
+        
+        print(f"  🔮🤝 T{t}: PREDICTIVE GROUP HUNT - {self.name} organizing future-oriented cooperation...")
+            
+        # より広範囲での仲間探索（予測的協力では範囲を拡大）
+        potential_members = []
+        all_npcs = [npc for npc in self.roster.values() if npc != self and npc.alive]
+        print(f"    🔍 PREDICTIVE: Checking {len(all_npcs)} alive NPCs for future cooperation")
+        
+        for npc in all_npcs:
+            distance = self.distance_to(npc.pos())
+            print(f"      - {npc.name}: distance={distance:.1f}, hunt_group={npc.hunt_group}, fatigue={npc.fatigue:.1f}")
+            
+            # 予測的協力では条件を大幅緩和（生存のため）
+            if (npc.hunt_group is None and 
+                distance <= 60 and  # 範囲拡大 40 → 60（生存圏拡大）
+                npc.fatigue < 151 and  # 疲労閾値を上限以上に設定（生存優先）
+                self.assess_cooperation_potential(npc, t)):  # 協力ポテンシャル評価
+                potential_members.append(npc)
+                print(f"        ✅ ELIGIBLE for predictive group hunt")
+            else:
+                print(f"        ❌ NOT ELIGIBLE for predictive cooperation")
+        
+        print(f"    👥 Found {len(potential_members)} potential members for predictive hunt (range: 60, fatigue<151)")
+        
+        if len(potential_members) >= 1:  # 最低2人（自分含む）で組織
+            print(f"    ✅ Enough members for predictive group hunt! Creating group...")
+            # 狩りグループ作成
+            hunt_group = HuntGroup(leader=self, target_prey_type='medium_game')
+            hunt_group.formation_tick = t
+            hunt_group.is_predictive = True  # 予測的協力フラグ
+            
+            # メンバー募集（予測的協力では成功しやすい）
+            recruited = 0
+            for npc in potential_members[:4]:  # 最大5人まで
+                # 予測的協力の参加意欲（通常より高い）
+                trust_level = npc.get_trust_level(self.name)
+                future_benefit = npc.sociability * 0.5  # 将来利益への理解
+                participation_desire = 0.6 + trust_level * 0.2 + future_benefit
+                
+                if participation_desire > 0.4:  # 予測的協力では参加しやすい
+                    npc.hunt_group = hunt_group
+                    hunt_group.add_member(npc)
+                    recruited += 1
+                    print(f"      ✅ {npc.name} joined predictive group hunt (desire: {participation_desire:.2f})")
+            
+            if hunt_group.can_start_hunt():
+                self.hunt_group = hunt_group
+                
+                print(f"  🔮🎯 T{t}: PREDICTIVE GROUP FORMED - {self.name} organized future-oriented group with {len(hunt_group.members)} members: {[m.name for m in hunt_group.members]}")
+                log_event(self.log, {
+                    "t": t, "name": self.name, "action": "organize_predictive_hunt_group",
+                    "members": [m.name for m in hunt_group.members],
+                    "target_prey": hunt_group.target_prey_type,
+                    "cooperation_type": "predictive"
+                })
+                
+                return True
+            else:
+                print(f"    ❌ Predictive group hunt failed: not enough recruited members ({recruited})")
+        else:
+            print(f"    ❌ Not enough potential members for predictive cooperation: {len(potential_members)}")
+        
+        return False
+    
+    def assess_cooperation_potential(self, other_npc, t):
+        """他のNPCとの協力ポテンシャルを評価"""
+        
+        potential = 0.0
+        
+        # 信頼関係
+        trust = self.get_trust_level(other_npc.name)
+        potential += trust * 0.3
+        
+        # 相互の社会性
+        social_compatibility = (self.sociability + other_npc.sociability) / 2
+        potential += social_compatibility * 0.4
+        
+        # 相互の経験値（経験豊富なペアは協力しやすい）
+        combined_experience = (self.experience.get('hunting', 0) + 
+                              other_npc.experience.get('hunting', 0))
+        potential += min(combined_experience * 0.1, 0.2)
+        
+        # 将来の困窮予測（どちらかが困りそうな場合）
+        future_need = max(
+            (self.hunger - 20) / 80,  # 0-1で正規化
+            (other_npc.hunger - 20) / 80
+        )
+        potential += future_need * 0.3
+        
+        return potential > 0.15  # 協力ポテンシャル閾値を緩和（0.3 → 0.15）
     
     def execute_group_hunt(self, t):
         """集団狩りの実行"""
@@ -817,10 +1326,10 @@ class NPC:
         hunt_group = self.hunt_group
         hunt_group.status = 'hunting'
         
-        # 全メンバーの疲労コスト
+        # 全メンバーの疲労コスト（上限制御）
         hunt_cost = HUNTING_SETTINGS['hunt_fatigue_cost']
         for member in hunt_group.members:
-            member.fatigue += hunt_cost
+            member.fatigue = min(150.0, member.fatigue + hunt_cost)
             member.last_hunt_attempt = t
         
         # 成功判定
@@ -832,6 +1341,8 @@ class NPC:
             # 狩り成功
             prey_type = hunt_group.target_prey_type
             meat_amount = PREY_TYPES[prey_type]['meat_amount']
+            
+            print(f"  🎉 T{t}: GROUP HUNT SUCCESS - {self.name}'s group caught {prey_type}, gained {meat_amount} meat!")
             
             # 肉リソース作成（グループ共有）
             meat = MeatResource(meat_amount, owner=self.name, hunt_group=hunt_group)
@@ -872,6 +1383,7 @@ class NPC:
                         member.update_trust(other_member.name, 
                                           'hunt_together_success', t, emotional_context)
         else:
+            print(f"  💔 T{t}: GROUP HUNT FAILED - {self.name}'s group failed to catch {hunt_group.target_prey_type}")
             # 狩り失敗
             for member in hunt_group.members:
                 member.hunt_failure_count += 1
@@ -893,7 +1405,7 @@ class NPC:
             
             if probability_check(injury_rate):
                 injury_damage = random.randint(2, 8) if hunt_successful else random.randint(3, 10)
-                member.fatigue += injury_damage
+                member.fatigue = min(150.0, member.fatigue + injury_damage)  # 疲労上限制御
                 critical_injury = False
                 
                 # 重症判定（集団では確率低下）
@@ -953,6 +1465,29 @@ class NPC:
             log_event(self.log, {
                 "t": t, "name": self.name, "action": "meat_spoiled",
                 "amount": meat.amount
+            })
+    
+    def consume_meat_if_hungry(self, t):
+        """空腹時に肉を消費して回復"""
+        if self.hunger > 40 and self.meat_inventory:  # より積極的に肉を消費（60→40）
+            meat = self.meat_inventory[0]  # 最初の肉を消費
+            consume_amount = meat.amount  # 制限を削除：全ての肉を消費可能
+            
+            # 空腹回復
+            hunger_recovery = consume_amount
+            old_hunger = self.hunger
+            self.hunger = max(0, self.hunger - hunger_recovery)
+            
+            # 肉の量を減らすか除去
+            meat.amount -= consume_amount
+            if meat.amount <= 0:
+                self.meat_inventory.remove(meat)
+            
+            print(f"  🍖 T{t}: MEAT CONSUMED - {self.name} ate {consume_amount:.1f} meat, hunger: {old_hunger:.1f} → {self.hunger:.1f}")
+            log_event(self.log, {
+                "t": t, "name": self.name, "action": "consume_meat", 
+                "amount": consume_amount, "hunger_recovery": hunger_recovery,
+                "new_hunger": self.hunger
             })
     
     def consider_meat_sharing(self, t):
@@ -1196,8 +1731,8 @@ class NPC:
         social_bonding = effective_empathy * 0.25
         self.E = max(0.0, self.E - social_bonding)
         
-        # 看護疲労
-        self.fatigue += 2
+        # 看護疲労（上限制御）
+        self.fatigue = min(150.0, self.fatigue + 2)
         
         # SSD理論：看護経験の獲得
         self.gain_experience('care', EXPERIENCE_SYSTEM_SETTINGS['care_exp_rate'], t)
@@ -1558,7 +2093,7 @@ class NPC:
                       awareness_exp * PREDATOR_AWARENESS_SETTINGS['alert_range_bonus'])
         
         for other_npc in all_npcs:
-            if other_npc != self and other_npc.health > 0:
+            if other_npc != self and other_npc.alive:
                 distance = distance_between((self.x, self.y), (other_npc.x, other_npc.y))
                 
                 if distance <= alert_range and random.random() < alert_effectiveness:

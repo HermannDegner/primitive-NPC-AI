@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced Simulation Module - 統合シミュレーション実行エンジン
+Enhanced Simulation Module    print("HUNT EXPANSION MODE - 30 Hunt Sources, Enhanced Survival Opportunities")- 統合シミュレーション実行エンジン
 SSD + 境界 + スマート環境 + 季節システムの完全統合実行
 """
 
@@ -17,11 +17,11 @@ from seasonal_system import SeasonalSystem
 # グローバル境界システム
 boundary_system = None
 
-def run_enhanced_ssd_simulation(ticks=400):
-    """SSD完全統合シミュレーション実行 + 季節システム"""
+def run_enhanced_ssd_simulation(ticks=800):
+    """SSD完全統合シミュレーション実行 + 季節システム（長期間）"""
     
     # 季節システム初期化
-    seasonal_system = SeasonalSystem(season_length=100)  # 1季節100ティック
+    seasonal_system = SeasonalSystem(season_length=100)  # 1季節100ティック（2年間実行）
     
     # シミュレーション統計変数
     total_predator_hunting_attempts = 0
@@ -34,25 +34,26 @@ def run_enhanced_ssd_simulation(ticks=400):
     
     # シミュレーション開始メッセージ
     print(f"Enhanced SSD Simulation with SEASONAL SYSTEM - Random seed: {seed}")
-    print("🌸🌞🍂❄️ FOUR SEASONS CARNIVORE SURVIVAL CHALLENGE 🌸🌞🍂❄️")
-    print("   Base: Berries: 0 (SEASONAL VARIATION), Water: 8, Hunt: 18, Caves: 6")
+    print("FOUR SEASONS OMNIVORE SURVIVAL CHALLENGE")
+    print("   Base: Berries: 24 (SEASONAL VARIATION), Water: 20, Hunt: 30, Caves: 10")
     print("   SEASONAL EFFECTS: Resource fluctuation, behavior changes, social dynamics")
     
-    # 環境設定（スマート環境統合）- 完全肉食社会 + 捕食者脅威
+    # 環境設定（生存重視バランス + ベリー復活 + 狩場拡大）- より生存しやすい環境
     env = Environment(size=DEFAULT_WORLD_SIZE, 
-                     n_berry=0,     # 完全撤廃 - 肉食のみの世界
-                     n_hunt=18,     # デフォルト60 → 18に（狩場を増加）  
-                     n_water=8,     # デフォルト40 → 8に80%削減（16人に対して0.5個/人）
-                     n_caves=6,     # デフォルト25 → 6に75%削減
+                     n_berry=24,    # ベリー復活 - 16人に1.5個/人（季節変動考慮）
+                     n_hunt=30,     # デフォルト60 → 30に拡大（16人に約2個/人）  
+                     n_water=20,    # デフォルト40 → 20に調整（16人に1.25個/人）
+                     n_caves=10,    # デフォルト25 → 10に調整（十分な避難所）
                      enable_smart_world=True)
     
-    # 捕食者追加
-    predator_positions = [(15, 85), (85, 15)]
-    for i, pos in enumerate(predator_positions):
-        predator = Predator(pos, aggression=0.4)
-        predator.hunt_radius = 8
-        env.predators.append(predator)
-        print(f"Added Balanced Predator_{i+1} at position {predator.pos()}")
+    # 捕食者追加 - 食料制限テスト用にコメントアウト
+    # predator_positions = [(15, 85), (85, 15), (50, 20), (20, 50)]  # 4体に増加
+    # for i, pos in enumerate(predator_positions):
+    #     predator = Predator(pos, aggression=0.7)  # 攻撃性を0.4→0.7に強化
+    #     predator.hunt_radius = 12  # 狩猟範囲を8→12に拡大
+    #     env.predators.append(predator)
+    #     print(f"Added HARSH Predator_{i+1} at position {predator.pos()}")
+    print("� HUNT EXPANSION MODE - 30 Hunt Sources, Enhanced Survival Opportunities")
     
     # スマート環境とバウンダリシステム初期化
     smart_env = SmartEnvironment(world_size=DEFAULT_WORLD_SIZE)
@@ -133,11 +134,12 @@ def run_simulation_loop(seasonal_system, env, smart_env, roster, experience_hand
         # エコシステム更新
         env.ecosystem_step(list(roster.values()), t)
         
-        # 捕食者狩り処理
-        process_predator_hunting(env, roster, seasonal_modifiers, current_season_name, t)
+        # 捕食者狩り処理 - 食料制限テスト用にコメントアウト
+        # process_predator_hunting(env, roster, seasonal_modifiers, current_season_name, t)
         
-        # 捕食者攻撃処理
-        predator_attacks = process_predator_attacks(env, roster, current_season_name, t)
+        # 捕食者攻撃処理 - 食料制限テスト用にコメントアウト
+        # predator_attacks = process_predator_attacks(env, roster, current_season_name, t)
+        predator_attacks = 0  # 捕食者なしなので攻撃もなし
         
         # スマート環境分析
         smart_env.analyze_npc_impact(list(roster.values()), t)
@@ -146,6 +148,13 @@ def run_simulation_loop(seasonal_system, env, smart_env, roster, experience_hand
         process_npc_decisions(roster, env, smart_env, seasonal_modifiers, 
                             experience_handler, boundary_checker, 
                             ssd_decision_logs, seasonal_logs, current_season_name, t)
+        
+        # 死亡NPCを除去
+        dead_npcs = [name for name, npc in roster.items() if not npc.alive]
+        for name in dead_npcs:
+            cause = "starvation" if roster[name].hunger > 150 else "dehydration"
+            print(f"  💀 T{t} ({current_season_name}): STARVATION/DEHYDRATION DEATH - {name} died from {cause}!")
+            del roster[name]
         
         # 進捗表示
         display_progress(roster, seasonal_modifiers, current_season_name, predator_attacks, t)

@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "D:\GitHub\primitive-NPC-AI\main.py", line 52, in <module>
+    main()
+  File "D:\GitHub\primitive-NPC-AI\main.py", line 26, in main
+    print("\U0001f30d Enhanced SSD Theory Simulation - Seasonal Carnivore Survival")
+UnicodeEncodeError: 'cp932' codec can't encode character '\U0001f30d' in position 0: illegal multibyte sequence

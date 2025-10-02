@@ -49,9 +49,9 @@ GROUP_PROTECTION_RADIUS = 10
 
 # 狩りシステムパラメータ
 HUNTING_SETTINGS = {
-    'solo_success_rate': 0.15,      # 単独狩りの成功率
-    'group_success_base': 0.4,      # 集団狩りの基本成功率
-    'group_success_per_member': 0.1, # メンバー1人あたりの成功率増加
+    'solo_success_rate': 0.40,      # 単独狩りの成功率（60% → 40%に下げて協力促進）
+    'group_success_base': 0.6,      # 集団狩りの基本成功率（0.4 → 0.6に向上）
+    'group_success_per_member': 0.15, # メンバー1人あたりの成功率増加（0.1 → 0.15に向上）
     'max_group_bonus': 0.4,         # 集団ボーナスの上限
     'danger_rate': 0.25,            # 狩り中の怪我確率（成功・失敗関係なく）
     'critical_injury_rate': 0.05,   # 重症確率（怪我の中での割合）
@@ -65,19 +65,19 @@ HUNTING_SETTINGS = {
 # 獲物の種類
 PREY_TYPES = {
     'small_game': {
-        'meat_amount': 0.6,
+        'meat_amount': 10.0,  # 3.0 → 10.0 に大幅増加（余裕のある生存）
         'difficulty': 0.3,
         'danger': 0.1,
         'required_hunters': 1
     },
     'medium_game': {
-        'meat_amount': 2.0,
+        'meat_amount': 8.0,  # 2.0 → 8.0 に増加（2人で4.0ずつ）
         'difficulty': 0.6,
         'danger': 0.3,
         'required_hunters': 2
     },
     'large_game': {
-        'meat_amount': 5.0,
+        'meat_amount': 20.0,  # 5.0 → 20.0 に増加（4人で5.0ずつ）
         'difficulty': 0.8,
         'danger': 0.5,
         'required_hunters': 4

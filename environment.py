@@ -304,6 +304,18 @@ class Environment:
         self.caves = {f"cave_{i}": (random.randint(5, size-5), random.randint(5, size-5)) 
                      for i in range(n_caves)}
         
+        # 洞窟雨水貯蔵システム
+        self.cave_water_storage = {cave_id: {
+            'water_amount': random.randint(0, 20),  # 初期水量 0-20
+            'max_capacity': random.randint(30, 80), # 最大容量 30-80
+            'collection_rate': random.uniform(0.5, 2.0),  # 雨水集積率 0.5-2.0/tick
+            'evaporation_rate': 0.1  # 蒸発率 0.1/tick (晴天時)
+        } for cave_id in self.caves.keys()}
+        
+        # 雨水統計
+        self.rain_duration = 0  # 連続雨天カウンター
+        self.total_rainwater_collected = 0.0
+        
         # 獲物動物の初期生成
         self._spawn_initial_prey()
         
@@ -312,8 +324,12 @@ class Environment:
         
     def step(self):
         """環境の1ステップ更新"""
+        old_weather = self.weather.condition
         self.weather.step()
         self.day_night.step()
+        
+        # 洞窟雨水システム更新
+        self._update_cave_water_system(old_weather)
         
         # 捕食者の行動
         for predator in self.predators:
@@ -334,6 +350,78 @@ class Environment:
         if random.random() < spawn_rate:
             pos = (random.randint(5, self.size-5), random.randint(5, self.size-5))
             self.predators.append(Predator(pos))
+    
+    def _update_cave_water_system(self, previous_weather):
+        """洞窟雨水システムの更新"""
+        # 洞窟水システムが無効な場合は何もしない
+        if not hasattr(self, 'cave_water_storage') or not self.cave_water_storage:
+            return
+            
+        current_weather = self.weather.condition
+        
+        # 雨天カウンター更新
+        if current_weather in ['rain', 'storm']:
+            self.rain_duration += 1
+        else:
+            self.rain_duration = 0
+        
+        for cave_id, water_data in self.cave_water_storage.items():
+            # 雨水集積
+            if current_weather == 'rain':
+                collection = water_data['collection_rate'] * 1.0  # 通常雨
+                collected = min(collection, water_data['max_capacity'] - water_data['water_amount'])
+                water_data['water_amount'] += collected
+                self.total_rainwater_collected += collected
+                
+                if collected > 0:
+                    cave_pos = self.caves[cave_id]
+                    print(f"🌧️💧 {cave_id} at {cave_pos}: 雨水 {collected:.1f} 収集 (貯蔵量: {water_data['water_amount']:.1f}/{water_data['max_capacity']})")
+                    
+            elif current_weather == 'storm':
+                collection = water_data['collection_rate'] * 2.5  # 嵐は2.5倍
+                collected = min(collection, water_data['max_capacity'] - water_data['water_amount'])
+                water_data['water_amount'] += collected
+                self.total_rainwater_collected += collected
+                
+                if collected > 0:
+                    cave_pos = self.caves[cave_id]
+                    print(f"⛈️💧 {cave_id} at {cave_pos}: 嵐雨水 {collected:.1f} 大量収集 (貯蔵量: {water_data['water_amount']:.1f}/{water_data['max_capacity']})")
+            
+            # 晴天時の蒸発
+            elif current_weather == 'clear' and water_data['water_amount'] > 0:
+                evaporation = min(water_data['evaporation_rate'], water_data['water_amount'])
+                water_data['water_amount'] -= evaporation
+                
+                if evaporation > 0.05:  # 微量の蒸発は表示しない
+                    cave_pos = self.caves[cave_id]
+                    print(f"☀️💨 {cave_id} at {cave_pos}: 蒸発 -{evaporation:.1f} (残量: {water_data['water_amount']:.1f})")
+    
+    def drink_cave_water(self, cave_id, npc_name, amount_needed=35):
+        """洞窟の水を飲む"""
+        if cave_id not in self.cave_water_storage:
+            return 0
+        
+        water_data = self.cave_water_storage[cave_id]
+        available_water = water_data['water_amount']
+        
+        if available_water <= 0:
+            return 0
+        
+        # 実際に飲める量
+        consumed = min(amount_needed, available_water)
+        water_data['water_amount'] -= consumed
+        
+        cave_pos = self.caves[cave_id]
+        print(f"🏞️💧 {npc_name} drank {consumed:.1f} cave water at {cave_id} {cave_pos} (残量: {water_data['water_amount']:.1f})")
+        
+        return consumed
+    
+    def get_cave_water_info(self, cave_id):
+        """洞窟の水情報を取得"""
+        if cave_id not in self.cave_water_storage:
+            return None
+        
+        return self.cave_water_storage[cave_id].copy()
     
     def _spawn_initial_prey(self):
         """初期獲物動物の生成"""
@@ -365,6 +453,11 @@ class Environment:
                 'intelligence': world_intelligence,
                 'npc_count': len([npc for npc in npcs if npc.alive])
             })
+        
+        # NPC個別時間進行処理（重要：空腹・喉の渇き・疲労更新）
+        for npc in npcs:
+            if npc.alive:
+                npc.step(current_tick)
         
         # 獲物動物の更新
         humans = [npc for npc in npcs if npc.alive]

@@ -31,48 +31,52 @@ class SeasonalSystem:
         season = self.get_current_season(t)
         progress = (self.season_tick % self.season_length) / self.season_length
         
-        if season == 0:  # 春 - 成長期
+        if season == 0:  # 春 - 成長期（改善版）
             return {
-                'berry_abundance': 1.0 + (progress * 0.8),  # 段階的増加
-                'prey_activity': 1.0 + (progress * 0.6),
+                'berry_abundance': 0.8 + (progress * 0.4),  # 植物性食物も適度に復活
+                'prey_activity': 0.8 + (progress * 0.4),  # 動物も適度に活発
                 'water_availability': 1.2,
                 'temperature_stress': 0.0,
-                'predator_activity': 0.8,  # 捕食者は比較的大人しい
+                'predator_activity': 0.0,  # 捕食者なし
                 'exploration_bonus': 0.3,  # 探索に適した季節
-                'social_gathering_bonus': 0.2
+                'social_gathering_bonus': 0.2,  # 積極的な社交
+                'starvation_risk': 0.0  # 春に飢餓リスクなし
             }
-        elif season == 1:  # 夏 - 豊穣期
+        elif season == 1:  # 夏 - 豊穣期（改善版）
             return {
-                'berry_abundance': 1.8 - (progress * 0.3),  # 前半ピーク、後半減少
-                'prey_activity': 1.4,
-                'water_availability': 1.0 - (progress * 0.4),  # 段階的減少
-                'temperature_stress': progress * 0.3,  # 暑さによるストレス
-                'predator_activity': 1.2,  # 捕食者も活発
-                'exploration_bonus': -0.1,  # 暑さで探索困難
-                'social_gathering_bonus': 0.4  # 豊富な食料で社交活発
+                'berry_abundance': 1.2 - (progress * 0.2),  # 豊かな植物性食物
+                'prey_activity': 1.3 - (progress * 0.1),  # 動物も活発
+                'water_availability': 1.0 - (progress * 0.2),  # 緊急時以外は十分
+                'temperature_stress': progress * 0.2,  # 暑さストレスは緊急時以外
+                'predator_activity': 0.0,  # 捕食者なし
+                'exploration_bonus': 0.1,  # 探索も可能
+                'social_gathering_bonus': 0.4,  # 豊かな食料で社交活発
+                'starvation_risk': 0.0  # 夏に飢餓リスクなし
             }
-        elif season == 2:  # 秋 - 準備期
+        elif season == 2:  # 秋 - 準備期（改善版）
             return {
-                'berry_abundance': 1.2 - (progress * 0.7),  # 急激な減少
-                'prey_activity': 1.0 - (progress * 0.3),
-                'water_availability': 0.8 + (progress * 0.3),  # 雨期で回復
+                'berry_abundance': 1.0 - (progress * 0.5),  # 源減していくが適度
+                'prey_activity': 0.9 - (progress * 0.3),  # 動物も減っていくが適度
+                'water_availability': 0.9 + (progress * 0.2),  # 雨期で回復
                 'temperature_stress': 0.1,
-                'predator_activity': 1.0 + (progress * 0.4),  # 冬に備えて活発化
-                'exploration_bonus': 0.1,
-                'social_gathering_bonus': -0.2,  # 準備で忙しく社交減少
-                'hoarding_pressure': progress * 0.6  # 蓄え圧力
+                'predator_activity': 0.0,  # 捕食者なし
+                'exploration_bonus': 0.2,  # 探索は可能
+                'social_gathering_bonus': 0.5,  # 冬の準備で集結
+                'hoarding_pressure': progress * 0.5,  # 適度な蓄え圧力
+                'starvation_risk': progress * 0.2  # 軽微な飢餓リスク
             }
-        else:  # 冬 - 試練期
+        else:  # 冬 - 試練期（改善版）
             return {
-                'berry_abundance': 0.2 + (math.sin(progress * 3.14159) * 0.1),  # 極少
-                'prey_activity': 0.4,  # 動物も少ない
-                'water_availability': 0.6,  # 氷結などで減少
+                'berry_abundance': 0.1 + (math.sin(progress * 3.14159) * 0.05),  # 植物性食物極少
+                'prey_activity': 0.3 - (progress * 0.1),  # 動物も少ないが存在
+                'water_availability': 0.7,  # 水は確保可能
                 'temperature_stress': 0.4 + (progress * 0.3),  # 寒さストレス
-                'predator_activity': 0.6 - (progress * 0.2),  # 後半は冬眠傾向
-                'exploration_bonus': -0.3,  # 探索困難
-                'social_gathering_bonus': 0.5,  # 寒さで集まる傾向
-                'survival_pressure': 0.4 + (progress * 0.4),  # 生存圧力最大
-                'shelter_importance': 0.8
+                'predator_activity': 0.0,  # 捕食者なし
+                'exploration_bonus': -0.2,  # 探索困難だが可能
+                'social_gathering_bonus': 0.8,  # 寒さで集まる必要性
+                'survival_pressure': 0.6 + (progress * 0.2),  # 適度な生存圧力
+                'shelter_importance': 0.7,  # 避難所の重要性
+                'starvation_risk': 0.3 + (progress * 0.3)  # 管理可能な飢餓リスク
             }
     
     def apply_seasonal_effects(self, env, npcs, t):

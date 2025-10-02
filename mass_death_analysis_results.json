@@ -1,0 +1,477 @@
+[
+  {
+    "run_id": 1,
+    "execution_time": 5.821218013763428,
+    "total_npcs": 1,
+    "survivors": 1,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 1
+    },
+    "survivor_health": {
+      "hunger": [
+        130.0
+      ],
+      "thirst": [
+        75.0
+      ],
+      "fatigue": [
+        129.45000000000002
+      ],
+      "curiosity": [
+        0.1
+      ],
+      "sociability": [
+        0.6
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 1669,
+      "leap_decisions": 1,
+      "total_decisions": 1670
+    }
+  },
+  {
+    "run_id": 2,
+    "execution_time": 7.03584361076355,
+    "total_npcs": 3,
+    "survivors": 3,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 3
+    },
+    "survivor_health": {
+      "hunger": [
+        55.91999999999999,
+        100.0,
+        9.0
+      ],
+      "thirst": [
+        60.0,
+        104.0,
+        60.0
+      ],
+      "fatigue": [
+        101.20000000000002,
+        79.90000000000002,
+        102.32499999999999
+      ],
+      "curiosity": [
+        0.1,
+        0.1,
+        0.1
+      ],
+      "sociability": [
+        0.6,
+        0.4,
+        0.7
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 1961,
+      "leap_decisions": 0,
+      "total_decisions": 1961
+    }
+  },
+  {
+    "run_id": 3,
+    "execution_time": 8.200784921646118,
+    "total_npcs": 10,
+    "survivors": 10,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 10
+    },
+    "survivor_health": {
+      "hunger": [
+        100.11439999999999,
+        42.699999999999996,
+        41.5,
+        60.0,
+        48.5,
+        38.0,
+        102.06799999999998,
+        39.0,
+        52.5,
+        40.0
+      ],
+      "thirst": [
+        120.0,
+        25.0,
+        60.0,
+        32.0,
+        130.0,
+        60.0,
+        124.0,
+        67.0,
+        60.0,
+        25.0
+      ],
+      "fatigue": [
+        150.0,
+        42.87500000000003,
+        111.62500000000001,
+        49.84999999999996,
+        91.55000000000001,
+        41.35,
+        127.5,
+        39.25000000000002,
+        43.77500000000003,
+        97.57499999999999
+      ],
+      "curiosity": [
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1
+      ],
+      "sociability": [
+        0.6,
+        0.3,
+        0.6,
+        0.9,
+        0.95,
+        0.8,
+        0.5,
+        0.2,
+        0.3,
+        0.6
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 2685,
+      "leap_decisions": 0,
+      "total_decisions": 2685
+    }
+  },
+  {
+    "run_id": 4,
+    "execution_time": 7.287890195846558,
+    "total_npcs": 2,
+    "survivors": 2,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 2
+    },
+    "survivor_health": {
+      "hunger": [
+        40.0,
+        8.0
+      ],
+      "thirst": [
+        165.0,
+        165.0
+      ],
+      "fatigue": [
+        44.07500000000003,
+        94.75
+      ],
+      "curiosity": [
+        0.1,
+        0.1
+      ],
+      "sociability": [
+        0.9,
+        0.5
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 1969,
+      "leap_decisions": 0,
+      "total_decisions": 1969
+    }
+  },
+  {
+    "run_id": 5,
+    "execution_time": 6.915191411972046,
+    "total_npcs": 2,
+    "survivors": 2,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 2
+    },
+    "survivor_health": {
+      "hunger": [
+        37.0,
+        25.0
+      ],
+      "thirst": [
+        67.0,
+        25.0
+      ],
+      "fatigue": [
+        80.49999999999999,
+        52.67499999999999
+      ],
+      "curiosity": [
+        0.1,
+        0.1
+      ],
+      "sociability": [
+        0.6,
+        0.6
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 1784,
+      "leap_decisions": 0,
+      "total_decisions": 1784
+    }
+  },
+  {
+    "run_id": 6,
+    "execution_time": 7.24649977684021,
+    "total_npcs": 3,
+    "survivors": 3,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 3
+    },
+    "survivor_health": {
+      "hunger": [
+        95.24399999999999,
+        80.0,
+        170.0
+      ],
+      "thirst": [
+        165.0,
+        95.0,
+        150.0
+      ],
+      "fatigue": [
+        108.04999999999998,
+        89.875,
+        150.0
+      ],
+      "curiosity": [
+        0.1,
+        0.1,
+        0.1
+      ],
+      "sociability": [
+        0.8,
+        0.5,
+        0.4
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 2157,
+      "leap_decisions": 0,
+      "total_decisions": 2157
+    }
+  },
+  {
+    "run_id": 7,
+    "execution_time": 6.574734687805176,
+    "total_npcs": 1,
+    "survivors": 1,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 1
+    },
+    "survivor_health": {
+      "hunger": [
+        50.0
+      ],
+      "thirst": [
+        60.0
+      ],
+      "fatigue": [
+        128.62499999999994
+      ],
+      "curiosity": [
+        0.1
+      ],
+      "sociability": [
+        0.6
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 1920,
+      "leap_decisions": 6,
+      "total_decisions": 1926
+    }
+  },
+  {
+    "run_id": 8,
+    "execution_time": 6.106542348861694,
+    "total_npcs": 2,
+    "survivors": 2,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 2
+    },
+    "survivor_health": {
+      "hunger": [
+        90.0,
+        174.0
+      ],
+      "thirst": [
+        120.0,
+        145.0
+      ],
+      "fatigue": [
+        150.0,
+        150.0
+      ],
+      "curiosity": [
+        0.1,
+        0.1
+      ],
+      "sociability": [
+        0.95,
+        0.5
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 1816,
+      "leap_decisions": 0,
+      "total_decisions": 1816
+    }
+  },
+  {
+    "run_id": 9,
+    "execution_time": 8.256189584732056,
+    "total_npcs": 8,
+    "survivors": 8,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 8
+    },
+    "survivor_health": {
+      "hunger": [
+        52.5,
+        33.0,
+        7.5,
+        38.0,
+        36.0,
+        50.0,
+        33.83519999999987,
+        43.5
+      ],
+      "thirst": [
+        25.0,
+        50.0,
+        4.0,
+        46.0,
+        20.0,
+        28.0,
+        21.0,
+        12.0
+      ],
+      "fatigue": [
+        39.450000000000045,
+        47.87500000000003,
+        45.574999999999996,
+        48.49999999999997,
+        77.83749999999999,
+        54.875,
+        38.44100000000002,
+        57.174999999999976
+      ],
+      "curiosity": [
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1
+      ],
+      "sociability": [
+        0.4,
+        0.3,
+        0.6,
+        0.9,
+        0.95,
+        0.7,
+        0.9,
+        0.3
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 2666,
+      "leap_decisions": 0,
+      "total_decisions": 2666
+    }
+  },
+  {
+    "run_id": 10,
+    "execution_time": 6.055211067199707,
+    "total_npcs": 1,
+    "survivors": 1,
+    "deaths": 0,
+    "survival_rate": 1.0,
+    "death_causes": {},
+    "death_times": [],
+    "death_locations": [],
+    "survivor_types": {
+      "unknown": 1
+    },
+    "survivor_health": {
+      "hunger": [
+        60.0
+      ],
+      "thirst": [
+        110.0
+      ],
+      "fatigue": [
+        117.05499999999999
+      ],
+      "curiosity": [
+        0.1
+      ],
+      "sociability": [
+        0.95
+      ]
+    },
+    "ssd_stats": {
+      "normal_decisions": 1758,
+      "leap_decisions": 0,
+      "total_decisions": 1758
+    }
+  }
+]
