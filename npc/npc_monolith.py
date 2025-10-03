@@ -20,8 +20,7 @@ from config import (
     PREDATOR_AWARENESS_SETTINGS,
     PREDATOR_HUNTING,
 )
-from social import Territory
-from ssd_core import ExplorationModeManager
+# from social import Territory  # Replaced by SSD Social Layer
 from future_prediction import FuturePredictionEngine
 from utils import distance_between
 from utils import probability_check
@@ -61,7 +60,14 @@ class NPC:
         self.exploration_mode = False
         self.exploration_mode_start_tick = 0
         self.exploration_intensity = 1.0
-        self.exploration_manager = ExplorationModeManager(self)
+        
+        # SSD Core Engine版の探索機能（デフォルト有効）
+        self.use_ssd_engine_exploration = True  # 新版使用フラグ
+        self.ssd_enhanced_ref = None  # SSDEnhancedNPCへの参照
+        
+        # SSD Core Engine版の社会システム
+        self.use_ssd_engine_social = True  # 社会システム新版フラグ
+        self.territory_id = None  # SSD版縄張りID
 
         # 未来予測エンジンの初期化
         self.future_engine = FuturePredictionEngine(self)
@@ -251,36 +257,42 @@ class NPC:
         self.y = max(0, min(self.env.size - 1, self.y))
 
     def consider_exploration_mode_shift(self, t):
-        """SSD理論：意味圧に応じた探索モードの跳躍的変化と復帰判定"""
-        life_crisis = self.exploration_manager.calculate_life_crisis_pressure()
+        """SSD理論：意味圧に応じた探索モードの跳躍的変化と復帰判定 (SSD Core Engine版)"""
+        
+        # SSD Core Engine版の探索機能を使用
+        if self.ssd_enhanced_ref:
+            life_crisis = self.ssd_enhanced_ref.calculate_life_crisis_pressure_v2()
+            
+            if self.exploration_mode:
+                # 命の危機時は即座に探索モードを終了
+                if life_crisis > 1.5:
+                    self.exploration_mode = False
+                    log_event(
+                        self.log,
+                        {
+                            "t": t,
+                            "name": self.name,
+                            "action": "emergency_exploration_exit_v2",
+                            "life_crisis": life_crisis,
+                            "reason": "ssd_engine_life_crisis_override",
+                        },
+                    )
+                    return True
 
-        if self.exploration_mode:
-            # 命の危機時は即座に探索モードを終了
-            if life_crisis > 1.5:
-                self.exploration_mode = False
-                log_event(
-                    self.log,
-                    {
-                        "t": t,
-                        "name": self.name,
-                        "action": "emergency_exploration_exit",
-                        "life_crisis": life_crisis,
-                        "reason": "life_crisis_override",
-                    },
-                )
-                return True
+                # 通常の復帰判定（SSD Core Engine版）
+                exploration_pressure = self.ssd_enhanced_ref.calculate_exploration_pressure_v2()
+                return self.ssd_enhanced_ref.consider_mode_reversion_v2(t, exploration_pressure)
+            else:
+                # 命の危機時は探索モードへの突入を抑制
+                if life_crisis > 1.0:
+                    return False
 
-            # 通常の復帰判定
-            exploration_pressure = self.exploration_manager.calculate_exploration_pressure()
-            return self.exploration_manager.consider_mode_reversion(t, exploration_pressure)
+                # 通常の跳躍判定（SSD Core Engine版）
+                exploration_pressure = self.ssd_enhanced_ref.calculate_exploration_pressure_v2()
+                return self.ssd_enhanced_ref.consider_exploration_leap_v2(t, exploration_pressure)
         else:
-            # 命の危機時は探索モードへの突入を抑制
-            if life_crisis > 1.0:
-                return False
-
-            # 通常の跳躍判定
-            exploration_pressure = self.exploration_manager.calculate_exploration_pressure()
-            return self.exploration_manager.consider_exploration_leap(t, exploration_pressure)
+            # フォールバック: SSD Enhanced NPCが設定されていない場合は探索モード変更しない
+            return False
 
     def assess_predator_threat(self):
         """捕食者脅威の評価"""
@@ -382,20 +394,26 @@ class NPC:
         oxytocin_effect = 0.0
 
         # 1. 縄張りメンバーシップによる安心感
-        if self.territory and self.territory.contains(location):
+        if self.use_ssd_engine_social and self.ssd_enhanced_ref and self.territory_id:
+            # SSD Core Engine版
+            if self.ssd_enhanced_ref.check_territory_contains_v2(self.territory_id, location):
+                oxytocin_effect += 0.3
+        elif self.territory and self.territory.contains(location):
+            # 従来版
             oxytocin_effect += 0.3
 
         # 2. 仲間の結束による安心感
         territory_members = 0
-        for npc in self.roster.values():
-            if (
-                npc != self
-                and npc.alive
-                and hasattr(npc, "territory")
-                and npc.territory
-                and npc.territory.contains(location)
-            ):
-                territory_members += 1
+        if self.use_ssd_engine_social and self.ssd_enhanced_ref:
+            # SSD Core Engine版 - 縄張りメンバーを取得
+            for npc in self.roster.values():
+                if (npc != self and npc.alive and 
+                    hasattr(npc, "territory_id") and npc.territory_id and
+                    self.ssd_enhanced_ref.check_territory_contains_v2(npc.territory_id, location)):
+                    territory_members += 1
+        else:
+            # 従来版は無効化
+            territory_members = 0
 
         bonding_effect = min(0.4, territory_members * 0.15)
         oxytocin_effect += bonding_effect
@@ -425,12 +443,21 @@ class NPC:
 
         safety_feeling: optional float value (0..1) passed from caller for diagnostics/logging
         """
-        if self.territory is None:
-            self.territory = Territory(cave_pos, radius=TERRITORY_RADIUS, owner=self.name)
-            self.territory.established_tick = t
-
-            # 近くの仲間を招待
-            self.invite_nearby_to_territory(t)
+        # SSD Core Engine版の社会システム使用
+        if self.use_ssd_engine_social and self.ssd_enhanced_ref and self.territory_id is None:
+            self.territory_id = self.ssd_enhanced_ref.create_territory_v2(cave_pos, TERRITORY_RADIUS, self.name)
+            
+            # 近くの仲間を招待（SSD版）
+            self.invite_nearby_to_territory_v2(t)
+            
+        # 従来バージョン - SSDエンジンでない場合は縄張り機能なし
+        else:
+            log_event(
+                "WARNING",
+                f"{self.name}: Territory claim disabled - SSD Engine not available",
+                t,
+                npc_name=self.name
+            )
 
             log_event(
                 self.log,
@@ -444,9 +471,9 @@ class NPC:
                 },
             )
 
-            # 境界システム統合
-            if self.boundary_system:
-                self.boundary_system.integrate_territory_as_boundary(self, self.territory)
+            # 境界システム統合 - SSDエンジンでは無効化
+            # if self.boundary_system and not self.use_ssd_engine_social:
+            #     self.boundary_system.integrate_territory_as_boundary(self, self.territory)
             try:
                 import os, csv
 
@@ -475,9 +502,11 @@ class NPC:
                 # ログ失敗は致命的ではないので無視
                 pass
 
-    def invite_nearby_to_territory(self, t):
-        """縄張りへの招待"""
-        if not self.territory:
+    # invite_nearby_to_territory - Removed (replaced by SSD Social Layer)
+    
+    def invite_nearby_to_territory_v2(self, t):
+        """縄張りへの招待（SSD Core Engine版）"""
+        if not self.territory_id or not self.ssd_enhanced_ref:
             return
 
         nearby_npcs = [
@@ -485,24 +514,26 @@ class NPC:
             for npc in self.roster.values()
             if npc != self
             and npc.alive
-            and npc.territory is None
+            and npc.territory_id is None  # SSD版フィールドをチェック
             and self.distance_to(npc.pos()) <= 12
         ]
 
         for npc in nearby_npcs:
             if probability_check(0.7):  # 70%の確率で招待
                 if probability_check(0.2):  # 20%の確率で受諾
-                    npc.territory = self.territory
-                    self.territory.add_member(npc.name)
-
+                    # SSD版では同じ縄張りIDを共有
+                    npc.territory_id = self.territory_id
+                    
+                    # ログ記録
                     log_event(
                         self.log,
                         {
                             "t": t,
                             "name": self.name,
-                            "action": "invite_to_territory",
+                            "action": "invite_to_territory_v2",
                             "invitee": npc.name,
                             "accepted": True,
+                            "territory_id": self.territory_id,
                         },
                     )
 
@@ -620,8 +651,11 @@ class NPC:
         if self.seek_help_for_injured(t):
             return  # 支援活動を優先
 
-        # 命の危機対応
-        life_crisis = self.exploration_manager.calculate_life_crisis_pressure()
+        # 命の危機対応（SSD Core Engine版）
+        if self.ssd_enhanced_ref:
+            life_crisis = self.ssd_enhanced_ref.calculate_life_crisis_pressure_v2()
+        else:
+            life_crisis = 0.0  # フォールバック
         if life_crisis > 1.0:
             # 現在の場所を特定
             current_location = "unknown"
@@ -1130,7 +1164,8 @@ class NPC:
                     )
 
                     # 縄張り設定の検討
-                    if safety_feeling >= self.territory_claim_threshold and not self.territory:
+                    has_territory = (self.use_ssd_engine_social and self.territory_id) or (not self.use_ssd_engine_social and self.territory)
+                    if safety_feeling >= self.territory_claim_threshold and not has_territory:
                         # mark the best cave row as is_best and then claim
                         try:
                             import os, csv
@@ -1431,7 +1466,7 @@ class NPC:
     def attempt_solo_hunt(self, t):
         """単独狩りの試行"""
         from config import HUNTING_SETTINGS, PREY_TYPES
-        from social import MeatResource
+        # from social import MeatResource  # Replaced by SSD Social Layer
 
         self.last_hunt_attempt = t
         print(f"  🏹 T{t}: HUNT ATTEMPT - {self.name} trying solo hunt...")
@@ -1452,10 +1487,13 @@ class NPC:
             prey_type = "small_game"  # 単独では小動物のみ
             meat_amount = PREY_TYPES[prey_type]["meat_amount"]
 
-            # 肉リソース獲得
-            meat = MeatResource(meat_amount, owner=self.name)
-            meat.creation_tick = t
-            self.meat_inventory.append(meat)
+            # 肉リソース獲得 - SSD Core Engine版
+            if self.use_ssd_engine_social and self.ssd_enhanced_ref:
+                meat_id = self.ssd_enhanced_ref.create_meat_resource_v2(meat_amount, self.name)
+                self.meat_inventory.append(meat_id)
+            else:
+                # 従来版無効化 - 値のみ追加
+                self.meat_inventory.append(meat_amount)
             print(
                 f"  🎯 T{t}: SOLO HUNT SUCCESS - {self.name} caught {prey_type}, gained {meat_amount} meat!"
             )
@@ -1536,13 +1574,14 @@ class NPC:
         return hunt_successful
 
     def organize_group_hunt(self, t):
-        """集団狩りの組織化"""
-        from social import HuntGroup
-        from config import HUNTING_SETTINGS
-
-        # 既にグループに参加している場合はスキップ
-        if self.hunt_group:
-            return False
+        """集団狩りの組織化 - SSD Core Engineでは予測版を使用"""
+        # SSD Core Engine使用時は予測版を優先
+        if self.use_ssd_engine_social:
+            return self.organize_predictive_group_hunt(t)
+        
+        # 従来版は無効化
+        print(f"    ❌ Group hunt disabled - SSD Engine required")
+        return False
 
         print(f"  🤝 T{t}: GROUP HUNT ATTEMPT - {self.name} trying to organize group hunt...")
 
@@ -1569,9 +1608,13 @@ class NPC:
 
         if len(potential_members) >= 1: # 最低2人（自分含む）で組織
             print("    ✅ Enough members for group hunt! Creating group...")
-            # 狩りグループ作成
-            hunt_group = HuntGroup(leader=self, target_prey_type="medium_game")
-            hunt_group.formation_tick = t
+            # 狩りグループ作成 - SSD Core Engine版
+            if self.use_ssd_engine_social and self.ssd_enhanced_ref:
+                hunt_group_id = self.ssd_enhanced_ref.create_hunt_group_v2(self.name, "medium_game")
+            else:
+                # 従来版無効化
+                print("    ❌ Group hunt disabled - SSD Engine required")
+                return False
 
             # メンバー募集
             recruited = 0
@@ -1625,7 +1668,7 @@ class NPC:
 
     def organize_predictive_group_hunt(self, t):
         """予測的グループハンティングの組織（将来に備えた協力）"""
-        from social import HuntGroup
+        # from social import HuntGroup  # Replaced by SSD Social Layer
         from config import HUNTING_SETTINGS
 
         # 既にグループに参加している場合はスキップ
@@ -1665,12 +1708,16 @@ class NPC:
 
         if len(potential_members) >= 1: # 最低2人（自分含む）で組織
             print("    ✅ Enough members for predictive group hunt! Creating group...")
-            # 狩りグループ作成
-            hunt_group = HuntGroup(leader=self, target_prey_type="medium_game")
-            hunt_group.formation_tick = t
-            hunt_group.is_predictive = True  # 予測的協力フラグ
+            # 狩りグループ作成 - SSD Core Engine版
+            if self.use_ssd_engine_social and self.ssd_enhanced_ref:
+                hunt_group_id = self.ssd_enhanced_ref.create_hunt_group_v2(self.name, "medium_game")
+            else:
+                # 従来版無効化
+                print("    ❌ Predictive group hunt disabled - SSD Engine required")
+                return False
 
-            # メンバー募集（予測的協力では成功しやすい）
+            # メンバー募集（予測的協力では成功しやすい）- SSD Core Engine版
+            member_names = [self.name]
             recruited = 0
             for npc in potential_members[:4]:  # 最大5人まで
                 # 予測的協力の参加意欲（通常より高い）
@@ -1679,22 +1726,18 @@ class NPC:
                 participation_desire = 0.6 + trust_level * 0.2 + future_benefit
 
                 if participation_desire > 0.4:  # 予測的協力では参加しやすい
-                    npc.hunt_group = hunt_group
-                    hunt_group.add_member(npc)
+                    npc.hunt_group = hunt_group_id  # SSD版のIDを設定
+                    member_names.append(npc.name)
                     recruited += 1
                     print(
                         f"      ✅ {npc.name} joined predictive group hunt (desire: {participation_desire:.2f})"
                     )
 
-            if hunt_group.can_start_hunt():
-                self.hunt_group = hunt_group
-
-                # 境界システムに狩りグループを統合
-                if self.boundary_system:
-                    self.boundary_system.integrate_hunt_group_as_boundary(hunt_group)
+            if recruited >= 1:  # SSD版では最低メンバー数チェック
+                self.hunt_group = hunt_group_id
 
                 print(
-                    f"  🔮🎯 T{t}: PREDICTIVE GROUP FORMED - {self.name} organized future-oriented group with {len(hunt_group.members)} members: {[m.name for m in hunt_group.members]}"
+                    f"  🔮🎯 T{t}: PREDICTIVE GROUP FORMED - {self.name} organized future-oriented group with {len(member_names)} members: {member_names}"
                 )
                 log_event(
                     self.log,
@@ -1702,9 +1745,10 @@ class NPC:
                         "t": t,
                         "name": self.name,
                         "action": "organize_predictive_hunt_group",
-                        "members": [m.name for m in hunt_group.members],
-                        "target_prey": hunt_group.target_prey_type,
+                        "members": member_names,
+                        "target_prey": "medium_game",
                         "cooperation_type": "predictive",
+                        "hunt_group_id": hunt_group_id,
                     },
                 )
 
@@ -1748,13 +1792,15 @@ class NPC:
     def execute_group_hunt(self, t):
         """集団狩りの実行"""
         from config import HUNTING_SETTINGS, PREY_TYPES
-        from social import MeatResource
+        # from social import MeatResource  # Replaced by SSD Social Layer
 
-        if not self.hunt_group or self.hunt_group.status != "forming":
-            return False
-
-        hunt_group = self.hunt_group
-        hunt_group.status = "hunting"
+        # SSD Core Engine版ではgroup huntは無効化（単独huntのみ）
+        if self.use_ssd_engine_social:
+            print(f"  ❌ Group hunt execution disabled - using individual hunt instead")
+            return self.attempt_solo_hunt(t)
+        
+        # 従来版も無効化
+        return False
 
         # 全メンバーの疲労コスト（上限制御）
         hunt_cost = HUNTING_SETTINGS["hunt_fatigue_cost"]
@@ -2951,20 +2997,20 @@ class NPC:
             meat_gained = 15.0 * len(group_members)  # グループサイズに応じて増加
             meat_per_member = meat_gained / len(group_members)
             
-            # HuntGroupオブジェクトを作成
-            from social import HuntGroup
-            hunt_group = HuntGroup(self.name)  # リーダーとして自分を設定
-            for member in group_members[1:]:  # リーダー以外を追加
-                hunt_group.add_member(member.name)
+            # SSD Core Engine版のグループ処理
+            if self.use_ssd_engine_social and self.ssd_enhanced_ref:
+                hunt_group_id = self.ssd_enhanced_ref.create_hunt_group_v2(self.name, "group_hunt")
             
             for member in group_members:
                 member.hunger = max(0, member.hunger - meat_per_member)
                 member.fatigue = min(100.0, member.fatigue + 10.0)
                 
-                # 肉在庫に追加
-                from social import MeatResource
-                meat_resource = MeatResource(meat_per_member, member.name, hunt_group)
-                member.meat_inventory.append(meat_resource)
+                # 肉在庫に追加 - SSD Core Engine版
+                if member.use_ssd_engine_social and member.ssd_enhanced_ref:
+                    meat_id = member.ssd_enhanced_ref.create_meat_resource_v2(meat_per_member, member.name)
+                    member.meat_inventory.append(meat_id)
+                else:
+                    member.meat_inventory.append(meat_per_member)
             
             print(f"🏹 T{t}: GROUP HUNT SUCCESS - {len(group_members)} members gained {meat_gained:.1f} meat")
             
