@@ -1,5 +1,10 @@
 """
-SSD Village Simulation - Environment System
+SSD Core Engine Compatible Environment System
+
+🌍 SSD INTEGRATION NOTE: This environment provides data compatible with
+ssd_core_engine ObjectInfo format. Environmental data should be structured
+to seamlessly convert to SSD-compatible types for NPC decision-making.
+
 構造主観力学(SSD)理論に基づく原始村落シミュレーション - 環境システム
 """
 

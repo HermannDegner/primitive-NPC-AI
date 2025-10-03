@@ -13,7 +13,7 @@ class SeasonalSystem:
     def __init__(self, season_length=50):
         self.season_length = season_length  # 1季節の長さ（ティック）
         self.current_season = 0  # 0:春, 1:夏, 2:秋, 3:冬
-        self.season_names = ["🌸Spring", "🌞Summer", "🍂Autumn", "❄️Winter"]
+        self.season_names = ["Spring", "Summer", "Autumn", "Winter"]
         self.season_tick = 0
 
     def get_current_season(self, t):
@@ -43,16 +43,17 @@ class SeasonalSystem:
                 "social_gathering_bonus": 0.2,  # 積極的な社交
                 "starvation_risk": 0.0,  # 春に飢餓リスクなし
             }
-        elif season == 1:  # 夏 - 豊穣期（改善版）
+        elif season == 1:  # 夏 - 豊穣期（環境圧大幅緩和版）
             return {
-                "berry_abundance": 1.2 - (progress * 0.2),  # 豊かな植物性食物
-                "prey_activity": 1.3 - (progress * 0.1),  # 動物も活発
-                "water_availability": 1.0 - (progress * 0.2),  # 緊急時以外は十分
-                "temperature_stress": progress * 0.2,  # 暑さストレスは緊急時以外
-                "predator_activity": 1.0,  # 捕食者活動を有効化
-                "exploration_bonus": 0.1,  # 探索も可能
-                "social_gathering_bonus": 0.4,  # 豊かな食料で社交活発
+                "berry_abundance": 1.5,  # 植物性食物を大幅増量
+                "prey_activity": 1.5,  # 動物も大幅増量
+                "water_availability": 1.3,  # 水も十分に確保
+                "temperature_stress": 0.0,  # 暑さストレスを完全に除去
+                "predator_activity": 0.7,  # 捕食者活動を軽減
+                "exploration_bonus": 0.3,  # 探索しやすく
+                "social_gathering_bonus": 0.5,  # 社交を活発に
                 "starvation_risk": 0.0,  # 夏に飢餓リスクなし
+                "thirst_resistance": 0.5,  # 脱水耐性を追加
             }
         elif season == 2:  # 秋 - 準備期（さらに緩和版）
             return {

@@ -1,5 +1,11 @@
 """
-NPC Base Module - NPCの基本クラスと初期化
+NPC Base Module - SSD Core Engine Integrated NPCs
+
+🤖 SSD INTEGRATION PRINCIPLE: NPCs are designed around ssd_core_engine.
+Each NPC should receive a dedicated SSD engine instance and use SSD
+decision-making systems rather than hardcoded behavior logic.
+
+NPCの基本クラスと初期化 - SSD Core Engine統合版
 """
 
 import random
@@ -24,8 +30,8 @@ from config import (
     PREDATOR_AWARENESS_SETTINGS,
     PREDATOR_HUNTING,
 )
-from future_prediction import FuturePredictionEngine
-from utils import distance_between, probability_check, log_event
+from systems.future_prediction import FuturePredictionEngine
+from systems.utils import distance_between, probability_check, log_event
 
 # 各モジュールから必要なミックスインをインポート
 from .npc_movement import NPCMovementMixin
@@ -34,6 +40,7 @@ from .npc_hunting import NPCHuntingMixin
 from .npc_cooperation import NPCCooperationMixin
 from .npc_territory import NPCTerritoryMixin
 from .npc_prediction import NPCPredictionMixin
+from .npc_physical_coherence import NPCPhysicalCoherenceMixin
 
 
 class NPC(
@@ -42,7 +49,8 @@ class NPC(
     NPCHuntingMixin,
     NPCCooperationMixin,
     NPCTerritoryMixin,
-    NPCPredictionMixin
+    NPCPredictionMixin,
+    NPCPhysicalCoherenceMixin
 ):
     """SSD理論に基づくNPCエージェント - 基本クラス"""
 
@@ -59,6 +67,12 @@ class NPC(
         self.fatigue = 20.0
         self.alive = True
         self.log = []
+        
+        # 危機感ヒートシステム
+        self.survival_heat = 0.0  # 生存危機感の蓄積レベル (0-100)
+        self.crisis_threshold = 30.0  # 危機感が行動に影響し始める閾値
+        self.panic_threshold = 60.0   # パニックレベル
+        self.desperation_threshold = 80.0  # 絶望レベル
 
         # 性格特性（SSD理論）
         self.curiosity = preset.get("curiosity", 0.5)
@@ -87,6 +101,10 @@ class NPC(
 
         # 未来予測エンジンの初期化
         self.future_engine = FuturePredictionEngine(self)
+        
+        # 物理基層整合慣性システムの初期化
+        if hasattr(self, '__init_physical_coherence__'):
+            self.__init_physical_coherence__()
 
         # 知識と記憶
         self.knowledge_caves = set()
@@ -228,3 +246,55 @@ class NPC(
         self.I_by_target[target_id] = max(0.0, min(1.0, I_after))
 
         return I_before, I_after, delta
+
+    def get_experience_efficiency(self, experience_type):
+        """経験に基づく行動効率の計算"""
+        if experience_type not in self.experience:
+            return 1.0
+
+        exp_value = self.experience[experience_type]
+        threshold = EXPERIENCE_SYSTEM_SETTINGS["experience_threshold"]
+        max_boost = EXPERIENCE_SYSTEM_SETTINGS["max_efficiency_boost"]
+
+        # 経験による効率向上（漸近的成長）
+        if exp_value < threshold:
+            efficiency = 1.0 + (exp_value / threshold) * (max_boost * 0.3)
+        else:
+            remaining = exp_value - threshold
+            efficiency = 1.0 + max_boost * 0.3 + (remaining / (remaining + 2)) * (max_boost * 0.7)
+
+        return min(1.0 + max_boost, efficiency)
+
+    def step_metabolism(self, tick):
+        """基本的な新陳代謝処理"""
+        # 基本代謝率（減少版：環境圧緩和）
+        base_hunger_rate = 0.8  # 1.5 → 0.8 (-47%)
+        base_thirst_rate = 0.9  # 1.8 → 0.9 (-50%)
+        base_fatigue_rate = 0.5  # 1.0 → 0.5 (-50%)
+        
+        # 季節・環境による補正
+        temp_stress = 0.0
+        if hasattr(self.env, 'seasonal_modifier'):
+            temp_stress = self.env.seasonal_modifier.get('temperature_stress', 0.0)
+        
+        # 代謝増加（高温時）
+        hunger_rate = base_hunger_rate * (1.0 + temp_stress * 0.3)
+        thirst_rate = base_thirst_rate * (1.0 + temp_stress * 0.5)  # 渇きは温度の影響大
+        fatigue_rate = base_fatigue_rate * (1.0 + temp_stress * 0.2)
+        
+        # 状態更新
+        self.hunger = min(100, self.hunger + hunger_rate)
+        self.thirst = min(100, self.thirst + thirst_rate)
+        self.fatigue = min(100, self.fatigue + fatigue_rate)
+
+    def gain_experience(self, experience_type, amount, t):
+        """経験値の獲得"""
+        if experience_type in self.experience:
+            old_value = self.experience[experience_type]
+            self.experience[experience_type] = min(10.0, old_value + amount)
+            
+            # SSD理論：経験の蓄積は整合慣性κとして機能
+            kappa_key = f"experience_{experience_type}"
+            if kappa_key not in self.kappa:
+                self.kappa[kappa_key] = 0.1
+            self.kappa[kappa_key] = min(1.0, self.kappa[kappa_key] + amount * 0.1)

@@ -1,7 +1,15 @@
 """
 SSD Village Simulation - Configuration
 構造主観力学(SSD)理論に基づく原始村落シミュレーション - 設定ファイル
+
+🔗 SSD基礎理論リポジトリ (常時参照必須):
 https://github.com/HermannDegner/Structural-Subjectivity-Dynamics
+
+この実装は上記基礎理論の指定に従い、特に以下の核心原理を遵守します:
+- 整合慣性κ = 記憶蓄積システム
+- 四層構造モデル (物理・基層・中核・上層)
+- 意味圧p(t)と整合・跳躍ダイナミクス
+- 構造観照(テオーリア)の姿勢
 """
 
 # SSD理論：性格プリセット
@@ -43,7 +51,12 @@ DEFAULT_WATER_SOURCE_COUNT = 40
 DEFAULT_CAVE_COUNT = 25
 
 # SSD理論パラメータ
-DEFAULT_KAPPA = 0.1  # 基本整合慣性
+# 🧠 CORE THEORETICAL INSIGHT: 整合慣性κ = 記憶蓄積システム
+# κ (kappa) は単なる物理パラメータではなく、エージェントの「記憶の強度」を表現する
+# - κ ↑ = より多くの記憶、より強い適応反応
+# - κ ↓ = 記憶が少ない、学習段階の状態
+# - 過去の体験が整合慣性に蓄積され、将来の行動に影響
+DEFAULT_KAPPA = 0.1  # 基本整合慣性（記憶蓄積強度）
 DEFAULT_TEMPERATURE = 1.0  # 温度パラメータ
 EXPLORATION_MODE_DURATION_THRESHOLD = 15  # 探索モード継続時間閾値
 

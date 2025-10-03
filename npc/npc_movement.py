@@ -9,11 +9,15 @@ import os
 # 親ディレクトリをパスに追加
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from utils import distance_between, log_event
+from systems.utils import distance_between, log_event
 
 
 class NPCMovementMixin:
     """NPC移動機能のミックスイン"""
+    
+    def pos(self):
+        """現在位置を取得"""
+        return (self.x, self.y)
     
     def distance_to(self, pos):
         """指定位置までの距離を計算"""
@@ -110,3 +114,31 @@ class NPCMovementMixin:
                 nearby_predators.append(predator)
 
         return threat_level, nearby_predators
+        
+    def seek_group_protection(self, t):
+        """グループ保護の探索"""
+        if not self.roster:
+            return False
+            
+        nearby_npcs = []
+        for other_name, other_npc in self.roster.items():
+            if other_name != self.name and other_npc.alive:
+                distance = self.distance_to(other_npc.pos())
+                if distance <= 20:
+                    nearby_npcs.append((other_npc, distance))
+        
+        if len(nearby_npcs) >= 2:  # 2人以上のグループ
+            # 最も近いグループの中心に移動
+            center_x = sum(npc.x for npc, _ in nearby_npcs) / len(nearby_npcs)
+            center_y = sum(npc.y for npc, _ in nearby_npcs) / len(nearby_npcs)
+            self.move_towards((int(center_x), int(center_y)))
+            
+            log_event(self.log, {
+                "t": t,
+                "name": self.name,
+                "action": "seek_group_protection",
+                "group_size": len(nearby_npcs)
+            })
+            return True
+            
+        return False
