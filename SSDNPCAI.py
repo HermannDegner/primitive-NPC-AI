@@ -67,58 +67,70 @@ class EnvScarce:
 # 2. NPCWithSSD クラス (キャラクター) - 修正と狩猟行動の追加
 # ----------------------------------------------------------------------
 class NPCWithSSD:
+    """
+    構造主観力学（Structural Subjectivity Dynamics, SSD）モデルを実装したNPCエージェント。
+    このクラスは、SSD理論に基づいた動的な意思決定プロセスを持ち、
+    生理的・心理的な「意味圧」に応じて自律的に行動する。
+    """
     def __init__(self, name, preset, env, roster_ref, start_pos):
         self.name = name
+        self.x, self.y = start_pos
         self.env = env
         self.roster_ref = roster_ref
-        self.x, self.y = start_pos
         
-        # === 生理的状態 ===
+        self.alive = True
+        self.state = "Idle"
+        self.action_type = None
+        self.target_pos = None
+        self.target_node = None
+        self.coop_target = None
+        
+        # 生理状態
         self.hunger = 50.0
         self.fatigue = 30.0
         self.injury = 0.0
-        self.alive = True
         
-        # === 行動状態の追加 (移動ロジック修正のため) ===
-        self.state = "Idle" # Idle, Moving, Foraging, Hunting, Resting, Helping
-        self.target_pos = None
-        self.target_node = None
-        self.action_type = None # 'forage' or 'hunt'
-        self.coop_target = None
-        
-        # === SSD数理モデルパラメータ ===
-        # 行動タイプを明示的に初期化 (改善点2.2対応)
-        self.kappa = defaultdict(lambda: 0.1)
-        self.kappa['forage'] = 0.1
-        self.kappa['hunt'] = 0.1
-        self.kappa['rest'] = 0.1
+        # --- 構造主観力学 (SSD) パラメータ ---
+        # 理論上の各概念とコード上の変数の対応:
+        #   - 整合慣性 (κ, kappa): 各行動への習熟度や習慣の強さ。高いほどその行動が選択されやすい。
+        #   - 熱 (E, Heat): 処理されなかった意味圧の蓄積。ストレスや衝動性の源泉。
+        #   - 探索温度 (T, Temperature): 行動の多様性を制御する。Tが高いと普段取らない行動も選択しやすくなる。
+        #   - 跳躍 (Leap): Eが極度に高まった際に発生する、死などの非連続的な状態変化。
+
+        # 整合(Alignment)関連パラメータ
+        self.kappa = defaultdict(lambda: 0.1) # κ: 各行動タイプの整合慣性 (初期値は低め)
+        self.kappa['forage'] = 0.8             # ★修正: 根源的欲求の初期値を高く設定
+        self.kappa['hunt'] = 0.6               # ★修正: 根源的欲求の初期値を高く設定
+        self.kappa['rest'] = 1.0               # ★修正: 根源的欲求の初期値を高く設定
         self.kappa['help'] = 0.1
-        
-        self.kappa_min = 0.05
-        self.E = 0.0
-        self.T = 0.3
-        
-        # パラメータ
-        self.G0 = 0.5
-        self.g = 0.7
-        self.eta = 0.3
-        self.lambda_forget = 0.02
-        self.lambda_forget_other = 0.002 # 提案3: 未選択行動の忘却係数
-        self.rho = 0.1
-        self.alpha = 0.6
-        self.beta_E = 0.15
-        
-        # 跳躍パラメータ
-        self.Theta0 = 1.0
-        self.a1 = 0.5
-        self.a2 = 0.4
-        self.h0 = 0.2
-        self.gamma = 0.8
-        
-        # 温度制御パラメータ
-        self.T0 = 0.3
-        self.c1 = 0.5
-        self.c2 = 0.6
+        self.kappa['patrol'] = 0.1
+        self.kappa_min = 0.05                  # κの最小値
+        self.G0 = 0.1                          # 基礎整合流係数
+        self.g = 0.05                          # 慣性依存係数
+        self.eta = 0.2                         # ★修正: 報酬によるκ学習率 (0.01 -> 0.2)
+
+        # 熱(Heat)関連パラメータ
+        self.E = 0.0                           # E: 熱 (未処理の意味圧の蓄積量)
+        self.alpha = 0.6                       # 熱の蓄積係数
+        self.beta_E = 0.15                     # 熱の自然散逸係数
+
+        # 忘却(Forgetting)関連パラメータ
+        self.lambda_forget = 0.02              # 選択された行動のκ忘却係数
+        self.lambda_forget_other = 0.002       # 未選択行動のκ忘却係数
+        self.rho = 0.05                        # ★修正: 失敗時のκペナルティ係数 (0.1 -> 0.05)
+
+        # 跳躍(Leap)関連パラメータ
+        self.Theta0 = 1.0                      # 跳躍発生の基礎閾値
+        self.a1 = 0.5                          # κ平均による閾値上昇係数
+        self.a2 = 0.4                          # 疲労による閾値下降係数
+        self.h0 = 0.2                          # 跳躍レートの基礎係数
+        self.gamma = 0.8                       # Eが閾値を超えた際の跳躍レート感度
+
+        # 温度(Temperature)関連パラメータ
+        self.T = 0.3                           # T: 探索温度
+        self.T0 = 0.3                          # ★修正: 基礎温度を0.3に戻す
+        self.c1 = 0.7                          # Eによる温度上昇係数
+        self.c2 = 0.6                          # κエントロピーによる温度下降係数
         
         # キャラクター特性
         p = preset
@@ -131,9 +143,9 @@ class NPCWithSSD:
         # 閾値
         self.TH_H = 55.0
         self.TH_F = 70.0
-        self.TH_I = 40.0 # 怪我の閾値
-        self.TH_B = 60.0 # 退屈の閾値
-        self.TH_JUMP_FATIGUE = 100.0 # 疲労による死亡リスク閾値 (改善点1.4対応)
+        self.TH_I = 40.0
+        self.TH_B = 60.0
+        self.TH_JUMP_FATIGUE = 100.0
         
         self.rel = defaultdict(float)
         self.help_debt = defaultdict(float)
@@ -147,38 +159,42 @@ class NPCWithSSD:
     def dist_to(self, target_pos):
         return abs(self.x - target_pos[0]) + abs(self.y - target_pos[1])
     
-    # 改善点1.2: 目的地に1マス近づく
     def move_towards(self, target):
         tx, ty = target
         dx = (1 if tx > self.x else -1 if tx < self.x else 0)
         dy = (1 if ty > self.y else -1 if ty < self.y else 0)
         
-        # どちらか一方だけを移動 (斜め移動を避ける)
         if dx != 0 and dy != 0:
-            if random.random() < 0.5:
-                dy = 0
-            else:
-                dx = 0
+            if random.random() < 0.5: dy = 0
+            else: dx = 0
         
         self.x += dx
         self.y += dy
-        
-        # 疲労の増加 (移動コスト)
         self.fatigue = min(120, self.fatigue + 0.2)
-        
         return (self.x, self.y) == target
 
     def nearby_allies(self, radius=3):
         return [o for on, o in self.roster_ref.items() 
                 if on != self.name and o.alive and self.dist_to(o.pos()) <= radius]
     
+    # --- SSD コア計算メソッド群 ---
+
     def alignment_flow(self, action_type, meaning_pressure):
+        """
+        理論式: J = (G0 + g*κ) * P_meaning
+        特定の行動(action_type)が、ある意味圧(meaning_pressure)をどれだけ処理できるかの流量(J)を計算する。
+        整合慣性κが高いほど、同じ意味圧からより大きな整合流を生み出せる。
+        """
         kappa = self.kappa[action_type]
         j = (self.G0 + self.g * kappa) * meaning_pressure
         return j
     
     def update_kappa(self, action_type, success, reward, chosen_action):
-        # 提案3: 選択されなかった行動のkappaを忘却させる
+        """
+        整合慣性κを更新する（学習と忘却）。
+        - 実行した行動(chosen_action)は、成功すれば報酬(reward)に応じてκが増加し、失敗すればペナルティを受ける。
+        - 実行されなかった他の行動のκは、lambda_forget_other分だけ僅かに減少（忘却）する。
+        """
         for at in list(self.kappa.keys()):
             if at != chosen_action:
                 self.kappa[at] = max(self.kappa_min, self.kappa[at] - self.lambda_forget_other)
@@ -194,11 +210,22 @@ class NPCWithSSD:
         self.kappa[action_type] = max(self.kappa_min, kappa + work - decay)
     
     def update_heat(self, meaning_pressure, processed_amount):
+        """
+        熱Eを更新する。
+        意味圧(meaning_pressure)が行動によって処理(processed_amount)しきれなかった場合、
+        その残差が熱(E)として蓄積される。熱は自然にも少しずつ散逸する。
+        """
         unprocessed = max(0, meaning_pressure - processed_amount)
         self.E += self.alpha * unprocessed - self.beta_E * self.E
         self.E = max(0, self.E)
     
     def check_leap(self):
+        """
+        跳躍（死などの非連続的な状態変化）の発生を判定する。
+        - 熱Eが、現在のκの平均や疲労度から決まる閾値Θ(Theta)をどれだけ超えているかに基づいて、
+          跳躍レートhが指数関数的に増加する。
+        - このhから計算される確率で跳躍が発生する。
+        """
         mean_kappa = np.mean(list(self.kappa.values())) if self.kappa else 0.1
         fatigue_factor = self.fatigue / 100.0
         Theta = self.Theta0 + self.a1 * mean_kappa - self.a2 * fatigue_factor
@@ -211,6 +238,11 @@ class NPCWithSSD:
         return False, h, Theta
     
     def update_temperature(self):
+        """
+        探索温度Tを更新する。
+        - 熱Eが高いほど、Tは上昇する（衝動的・探索的になる）。
+        - κの多様性(標準偏差で代用)が高い（色々な行動が満遍なく得意）ほど、Tは下降する（安定する）。
+        """
         kappa_values = list(self.kappa.values())
         if len(kappa_values) > 1:
             entropy = np.std(kappa_values)
@@ -226,266 +258,117 @@ class NPCWithSSD:
         myneed = max(0, (self.hunger - 55) / 40) + max(0, (self.injury - 15) / 50) + max(0, (self.fatigue - 70) / 50)
         return need * base - 0.4 * myneed
     
-    # 改善点1.3: 協力行動中に状態を維持
     def maybe_help(self, t):
-        # 既に協力行動中の場合は継続
         if self.state == "Helping":
-            # 協力対象が死んでいたら終了
             if not self.coop_target or not self.coop_target.alive:
-                self.state = "Idle"
-                self.coop_target = None
-                return False
+                self.state = "Idle"; self.coop_target = None; return False
             
             best = self.coop_target
-            
-            # 協力行動の継続ロジック (簡略化のため、1ステップで完結するロジックを再実行)
-            # 食料分け与え
             if self.hunger < 85 and best.hunger > 75:
-                delta = 15.0 # 継続中のため量を減らす
-                self.hunger = min(100.0, self.hunger + 3.0)
-                best.hunger = max(0.0, best.hunger - delta)
-                self.rel[best.name] += 0.04
-                best.rel[self.name] += 0.02
-                best.help_debt[self.name] += 0.1
+                delta = 15.0
+                self.hunger = min(100.0, self.hunger + 3.0); best.hunger = max(0.0, best.hunger - delta)
+                self.rel[best.name] += 0.04; best.rel[self.name] += 0.02; best.help_debt[self.name] += 0.1
                 self.update_kappa("help", True, delta * 0.2, "help")
-                
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Helping", "action": "share_food_cont",
-                    "target": best.name, "amount": delta,
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2),
-                    "kappa_help": round(self.kappa["help"], 3)
-                })
+                self.log.append({"t": t, "name": self.name, "state": "Helping", "action": "share_food_cont", "target": best.name, "amount": delta, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_help": round(self.kappa["help"], 3)})
                 return True
-            
-            # 休息の介助
             elif best.injury > 30 or best.fatigue > 85:
-                best.fatigue = max(0, best.fatigue - 14.0 * (1 + 0.1 * self.stamina))
-                best.injury = max(0, best.injury - 3.0)
+                best.fatigue = max(0, best.fatigue - 14.0 * (1 + 0.1 * self.stamina)); best.injury = max(0, best.injury - 3.0)
                 self.fatigue = min(100, self.fatigue + 3.0)
-                self.rel[best.name] += 0.05
-                best.rel[self.name] += 0.02
-                best.help_debt[self.name] += 0.1
+                self.rel[best.name] += 0.05; best.rel[self.name] += 0.02; best.help_debt[self.name] += 0.1
                 self.update_kappa("help", True, 10.0, "help")
-                
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Helping", "action": "escort_rest_cont",
-                    "target": best.name, "amount": 0,
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2),
-                    "kappa_help": round(self.kappa["help"], 3)
-                })
-                
-                # 状態が改善したら協力終了
-                if best.hunger <= 75 and best.injury <= 30 and best.fatigue <= 85:
-                    self.state = "Idle"
-                    self.coop_target = None
+                self.log.append({"t": t, "name": self.name, "state": "Helping", "action": "escort_rest_cont", "target": best.name, "amount": 0, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_help": round(self.kappa["help"], 3)})
+                if best.hunger <= 75 and best.injury <= 30 and best.fatigue <= 85: self.state = "Idle"; self.coop_target = None
                 return True
-            
-            # 協力の必要がなくなったら終了
             else:
-                self.state = "Idle"
-                self.coop_target = None
-                return False
+                self.state = "Idle"; self.coop_target = None; return False
 
-        # 新規の協力判定
-        allies = self.nearby_allies(radius=3)
-        if not allies:
-            return False
+        allies = self.nearby_allies(radius=2) # ★修正: 範囲を3から2に
+        if not allies: return False
         
-        best = None
-        bestu = 0.0
+        best = None; bestu = 0.0
         for o in allies:
-            u = self.help_utility(o)
-            # 相手が既に協力状態ならスキップ
             if o.state == "Helping": continue
-            if u > bestu:
-                bestu = u
-                best = o
+            u = self.help_utility(o)
+            if u > bestu: bestu = u; best = o
         
-        if best and bestu > 0.08: # 閾値を少し上げる
-            self.state = "Helping"
-            self.coop_target = best
-            
-            # 新規の協力開始ロジック (1ステップ目の処理)
+        if best and bestu > 0.06: # ★修正: 閾値を0.08から0.06に
+            self.state = "Helping"; self.coop_target = best
             if self.hunger < 85 and best.hunger > 75:
                 delta = 25.0
-                self.hunger = min(100.0, self.hunger + 6.0)
-                best.hunger = max(0.0, best.hunger - delta)
-                self.rel[best.name] += 0.08
-                best.rel[self.name] += 0.04
-                best.help_debt[self.name] += 0.2
+                self.hunger = min(100.0, self.hunger + 6.0); best.hunger = max(0.0, best.hunger - delta)
+                self.rel[best.name] += 0.08; best.rel[self.name] += 0.04; best.help_debt[self.name] += 0.2
                 self.update_kappa("help", True, delta * 0.5, "help")
-                
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Helping", "action": "share_food_start",
-                    "target": best.name, "amount": delta,
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2),
-                    "kappa_help": round(self.kappa["help"], 3)
-                })
+                self.log.append({"t": t, "name": self.name, "state": "Helping", "action": "share_food_start", "target": best.name, "amount": delta, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_help": round(self.kappa["help"], 3)})
                 return True
-            
             elif best.injury > 30 or best.fatigue > 85:
-                best.fatigue = max(0, best.fatigue - 28.0 * (1 + 0.2 * self.stamina))
-                best.injury = max(0, best.injury - 7.0)
+                best.fatigue = max(0, best.fatigue - 28.0 * (1 + 0.2 * self.stamina)); best.injury = max(0, best.injury - 7.0)
                 self.fatigue = min(100, self.fatigue + 6.0)
-                self.rel[best.name] += 0.1
-                best.rel[self.name] += 0.05
-                best.help_debt[self.name] += 0.25
+                self.rel[best.name] += 0.1; best.rel[self.name] += 0.05; best.help_debt[self.name] += 0.25
                 self.update_kappa("help", True, 20.0, "help")
-                
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Helping", "action": "escort_rest_start",
-                    "target": best.name, "amount": 0,
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2),
-                    "kappa_help": round(self.kappa["help"], 3)
-                })
+                self.log.append({"t": t, "name": self.name, "state": "Helping", "action": "escort_rest_start", "target": best.name, "amount": 0, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_help": round(self.kappa["help"], 3)})
                 return True
-            
-            # 協力判定はしたが、実際の行動に至らなかった場合
             else:
-                self.state = "Idle"
-                self.coop_target = None
-                return False
-        
+                self.state = "Idle"; self.coop_target = None; return False
         return False
 
     def do_forage(self, t):
-        # Moving/Foraging いずれでもハンドルする
         if self.action_type == "forage" and self.target_pos:
-            # 未到着なら1マス前進
             if self.pos() != self.target_pos:
                 self.move_towards(self.target_pos)
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Moving", "action": "move_forage",
-                    "target": self.target_pos, "amount": self.dist_to(self.target_pos),
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2)
-                })
+                self.log.append({"t": t, "name": self.name, "state": "Moving", "action": "move_forage", "target": self.target_pos, "amount": self.dist_to(self.target_pos), "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2)})
                 return True
             else:
-                # 到着したら Foraging に遷移して実行
                 self.state = "Foraging"
                 node = self.target_node
                 success, food, risk, p = self.env.forage(self.pos(), node)
-                
-                # 採餌行動の処理
                 meaning_p = (self.hunger - self.TH_H) / (100 - self.TH_H)
                 j_forage = self.alignment_flow("forage", meaning_p)
-                
                 if success:
-                    self.hunger = max(0, self.hunger - food)
-                    self.fatigue = min(100, self.fatigue + 1.0) # 採餌の疲労
-                    self.update_kappa("forage", True, food, "forage")
-                    self.update_heat(meaning_p, j_forage)
-                    
-                    self.log.append({
-                        "t": t, "name": self.name, "state": "Foraging", "action": "eat_success",
-                        "target": "Berry", "amount": round(food, 1),
-                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                        "injury": round(self.injury, 1),
-                        "E": round(self.E, 2), "T": round(self.T, 2),
-                        "kappa_forage": round(self.kappa["forage"], 3)
-                    })
+                    self.hunger = max(0, self.hunger - food); self.fatigue = min(100, self.fatigue + 1.0)
+                    self.update_kappa("forage", True, food, "forage"); self.update_heat(meaning_p, j_forage)
+                    self.log.append({"t": t, "name": self.name, "state": "Foraging", "action": "eat_success", "target": "Berry", "amount": round(food, 1), "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_forage": round(self.kappa["forage"], 3)})
                 else:
-                    self.fatigue = min(100, self.fatigue + 2.0) # 失敗の疲労
-                    self.update_kappa("forage", False, 0, "forage")
-                    self.update_heat(meaning_p, 0)
-                    
-                    self.log.append({
-                        "t": t, "name": self.name, "state": "Foraging", "action": "eat_fail",
-                        "target": "Berry", "amount": 0,
-                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                        "injury": round(self.injury, 1),
-                        "E": round(self.E, 2), "T": round(self.T, 2),
-                        "kappa_forage": round(self.kappa["forage"], 3)
-                    })
-                
-                # 行動終了
-                self.state = "Idle"
-                self.target_pos = None
-                self.target_node = None
-                self.action_type = None
+                    self.fatigue = min(100, self.fatigue + 2.0)
+                    self.update_kappa("forage", False, 0, "forage"); self.update_heat(meaning_p, 0)
+                    self.log.append({"t": t, "name": self.name, "state": "Foraging", "action": "eat_fail", "target": "Berry", "amount": 0, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_forage": round(self.kappa["forage"], 3)})
+                self.state = "Idle"; self.target_pos = None; self.target_node = None; self.action_type = None
                 return True
         return False
 
-    # 改善点3.2: 狩猟行動の追加
     def do_hunt(self, t):
         if self.action_type == "hunt" and self.target_pos:
             if self.pos() != self.target_pos:
                 self.move_towards(self.target_pos)
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Moving", "action": "move_hunt",
-                    "target": self.target_pos, "amount": self.dist_to(self.target_pos),
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2)
-                })
+                self.log.append({"t": t, "name": self.name, "state": "Moving", "action": "move_hunt", "target": self.target_pos, "amount": self.dist_to(self.target_pos), "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2)})
                 return True
             else:
                 self.state = "Hunting"
                 node = self.target_node
-                
-                # 協力ボーナスを計算
-                allies = self.nearby_allies(radius=1)
-                coop_bonus = len(allies) * 0.15 * (1 + self.empathy)
+                allies = self.nearby_allies(radius=1); coop_bonus = len(allies) * 0.15 * (1 + self.empathy)
                 injury_factor = 1.0 - self.injury / 100.0
-                
                 success, food, risk, p = self.env.hunt(self.pos(), node, injury_factor, coop_bonus)
-                
-                # 狩猟行動の処理
                 meaning_p = (self.hunger - self.TH_H) / (100 - self.TH_H)
                 j_hunt = self.alignment_flow("hunt", meaning_p)
-                
                 if success:
-                    self.hunger = max(0, self.hunger - food)
-                    self.fatigue = min(100, self.fatigue + 5.0) # 狩猟の疲労
-                    self.injury = min(100, self.injury + 2.0 * risk * self.risk_tolerance)
-                    self.update_kappa("hunt", True, food, "hunt")
-                    self.update_heat(meaning_p, j_hunt)
-                    
-                    self.log.append({
-                        "t": t, "name": self.name, "state": "Hunting", "action": "hunt_success",
-                        "target": "HuntZone", "amount": round(food, 1),
-                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                        "injury": round(self.injury, 1),
-                        "E": round(self.E, 2), "T": round(self.T, 2),
-                        "kappa_hunt": round(self.kappa["hunt"], 3)
-                    })
+                    self.hunger = max(0, self.hunger - food); self.fatigue = min(100, self.fatigue + 5.0); self.injury = min(100, self.injury + 2.0 * risk * self.risk_tolerance)
+                    self.update_kappa("hunt", True, food, "hunt"); self.update_heat(meaning_p, j_hunt)
+                    self.log.append({"t": t, "name": self.name, "state": "Hunting", "action": "hunt_success", "target": "HuntZone", "amount": round(food, 1), "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_hunt": round(self.kappa["hunt"], 3)})
                 else:
-                    self.fatigue = min(100, self.fatigue + 10.0) # 失敗の疲労
-                    self.injury = min(100, self.injury + 5.0 * risk * self.risk_tolerance)
-                    self.update_kappa("hunt", False, 0, "hunt")
-                    self.update_heat(meaning_p, 0)
-                    
-                    self.log.append({
-                        "t": t, "name": self.name, "state": "Hunting", "action": "hunt_fail",
-                        "target": "HuntZone", "amount": 0,
-                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                        "injury": round(self.injury, 1),
-                        "E": round(self.E, 2), "T": round(self.T, 2),
-                        "kappa_hunt": round(self.kappa["hunt"], 3)
-                    })
-                
-                # 行動終了
-                self.state = "Idle"
-                self.target_pos = None
-                self.target_node = None
-                self.action_type = None
+                    self.fatigue = min(100, self.fatigue + 10.0); self.injury = min(100, self.injury + 5.0 * risk * self.risk_tolerance)
+                    self.update_kappa("hunt", False, 0, "hunt"); self.update_heat(meaning_p, 0)
+                    self.log.append({"t": t, "name": self.name, "state": "Hunting", "action": "hunt_fail", "target": "HuntZone", "amount": 0, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_hunt": round(self.kappa["hunt"], 3)})
+                self.state = "Idle"; self.target_pos = None; self.target_node = None; self.action_type = None
                 return True
         return False
 
-    # --- ここから理論準拠のための新メソッド群 ---
+    # --- 新しい行動選択メソッド群 (SSD理論の中核) ---
     
-    # 提案1: 意味圧の統合
     def _calculate_meaning_pressures(self):
+        """
+        【STEP 1】意味圧の計算
+        現在の生理的・心理的状態（飢え、疲労など）を、理論上の「意味圧ベクトル」に変換する。
+        各圧力は0-1の範囲に正規化される。
+        """
         pressures = {
             'hunger': max(0, (self.hunger - self.TH_H) / (100 - self.TH_H)),
             'fatigue': max(0, (self.fatigue - self.TH_F) / (100 - self.TH_F)),
@@ -493,198 +376,134 @@ class NPCWithSSD:
             'boredom': max(0, (self.boredom - self.TH_B) / (100 - self.TH_B)),
             'help': 0.0
         }
-        
-        # 協力の必要性を意味圧として追加
-        allies = self.nearby_allies(radius=3)
+        allies = self.nearby_allies(radius=2)
         if allies:
             best_help_utility = max([self.help_utility(o) for o in allies] + [0.0])
-            pressures['help'] = max(0, best_help_utility * 2.0) # 効用値を圧力に変換
-
+            pressures['help'] = max(0, best_help_utility * 2.0)
         return pressures
 
-    # 提案1&2: 行動の効用値計算
     def _calculate_action_utilities(self, pressures):
+        """
+        【STEP 2】行動効用値の計算
+        各行動が、現在の意味圧ベクトルをどれだけ解消できそうか（効用）を評価する。
+        - 各行動は特定の種類（複数も可）の意味圧を解消するのに役立つ。
+        - 効用値は、その行動の整合慣性κの大きさに応じてブーストされる。
+        """
         utilities = defaultdict(float)
-
-        # 各行動がどの意味圧をどれだけ解消するかを定義
         utilities['rest'] = pressures['fatigue'] * 1.5 + pressures['injury'] * 0.5
         utilities['forage'] = pressures['hunger'] * (1.0 - self.risk_tolerance) * 1.2
         utilities['hunt'] = pressures['hunger'] * self.risk_tolerance * 1.2
         utilities['help'] = pressures['help'] * 1.1
-        utilities['patrol'] = pressures['boredom'] * 0.8 + 0.05 # 基本効用値
-
-        # 整合慣性(kappa)を効用値に反映
+        utilities['patrol'] = pressures['boredom'] * 0.8 + 0.05
         for action, util in utilities.items():
             utilities[action] = util * (1 + self.kappa[action] * self.g)
-
         return utilities
 
-    # 提案2: ソフトマックス選択
     def _softmax_selection(self, utilities):
-        # Tが0に近づくとエラーになるため下限を設定
+        """
+        【STEP 3】ソフトマックスによる行動選択
+        計算された効用値ベクトルに基づき、実行する行動を確率的に選択する。
+        - 探索温度Tが低い時：効用値が最も高い行動が選ばれやすい（合理的選択）。
+        - 探索温度Tが高い時：効用値が低い行動も選ばれる可能性が上がる（探索的選択）。
+        """
         temp = max(self.T, 0.01)
-        
         action_names = list(utilities.keys())
         utils = np.array([utilities[name] for name in action_names])
-        
-        # 数値的に安定したソフトマックス
         exp_utils = np.exp((utils - np.max(utils)) / temp)
         probs = exp_utils / np.sum(exp_utils)
-        
         chosen_action = np.random.choice(action_names, p=probs)
         return chosen_action
 
-    # --- ここまで ---
+    # --- メインの行動サイクル ---
 
     def step(self, t):
-        if not self.alive:
-            return
-        
+        if not self.alive: return
+
         # 代謝
-        hunger_pressure = 1.8
-        fatigue_pressure = 0.8
-        self.hunger = min(120, self.hunger + hunger_pressure)
-        self.fatigue = min(120, self.fatigue + fatigue_pressure)
+        self.hunger = min(120, self.hunger + 1.8)
+        self.fatigue = min(120, self.fatigue + 0.8)
         self.injury = min(120, self.injury + 0.02 * self.fatigue / 100)
         self.boredom = min(120, self.boredom + 0.1)
         
-        # 改善点1.4: 疲労による死亡リスクの追加
-        death_risk_factor = 1.0
-        if self.fatigue >= self.TH_JUMP_FATIGUE:
-            death_risk_factor += (self.fatigue - self.TH_JUMP_FATIGUE) / 20.0
-            
         # 跳躍判定（死）
+        death_risk_factor = 1.0 + max(0, (self.fatigue - self.TH_JUMP_FATIGUE) / 20.0)
         if self.hunger >= 100 or self.injury >= 100 or self.fatigue >= 120:
             leap_occurred, h, Theta = self.check_leap()
             if leap_occurred * death_risk_factor > 0.5 or self.hunger >= 110 or self.injury >= 110 or self.fatigue >= 120:
                 self.alive = False
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Dead", "action": "death",
-                    "target": "", "amount": 0,
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "jump_rate": round(h, 3), "Theta": round(Theta, 2)
-                })
+                self.log.append({"t": t, "name": self.name, "state": "Dead", "action": "death", "target": "", "amount": 0, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "jump_rate": round(h, 3), "Theta": round(Theta, 2)})
                 return
         
-        # 探索温度の更新
         self.update_temperature()
         
-        # 進行中の行動の継続 (移動など)
+        # --- 進行中の行動の継続 ---
         if self.state == "Moving":
-            if self.action_type == 'forage':
-                self.do_forage(t); return
-            elif self.action_type == 'hunt':
-                self.do_hunt(t); return
-            else: # 探索などの移動
-                if self.pos() == self.target_pos: self.state = "Idle"
-                else: self.move_towards(self.target_pos)
+            if self.action_type == 'forage': self.do_forage(t); return
+            elif self.action_type == 'hunt': self.do_hunt(t); return
+            elif self.action_type == 'patrol':
+                # ★修正: パトロール完了時に正しくアイドルに戻る
+                if self.move_towards(self.target_pos):
+                    self.state = "Idle"; self.action_type = None; self.target_pos = None
                 return
 
-        # 進行中の協力行動
         if self.state == "Helping":
-            if self.maybe_help(t):
-                return
+            if self.maybe_help(t): return
         
-        # === 新しい行動選択ロジック (ここからが刷新部分) ===
+        # === 新しい行動選択ロジック ===
         if self.state == "Idle":
-            # 1. 意味圧の計算
             pressures = self._calculate_meaning_pressures()
-            total_pressure = sum(pressures.values())
-
-            # 2. 行動効用値の計算
             utilities = self._calculate_action_utilities(pressures)
-
-            # 3. ソフトマックスで行動を選択
             action = self._softmax_selection(utilities)
 
-            # 4. 選択された行動の実行
-            
-            # 協力
             if action == 'help':
-                if self.maybe_help(t):
-                    return
+                if self.maybe_help(t): return
 
-            # 休息
             elif action == 'rest':
                 self.state = "Resting"
                 rest_amount = 30 * (1 + 0.25 * self.stamina)
                 self.fatigue = max(0, self.fatigue - rest_amount)
                 self.injury = max(0, self.injury - 4 * (1 + 0.1 * self.stamina))
-                self.boredom = min(100, self.boredom + 5) # 休息は退屈
-                
-                self.update_kappa("rest", True, rest_amount, action)
+                self.boredom = min(100, self.boredom + 5)
+                # ★修正: 休息のκ更新重みを0.6倍に落とす
+                self.update_kappa("rest", True, rest_amount * 0.6, action)
                 self.update_heat(pressures.get('fatigue', 0), rest_amount / 30)
-                
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Resting", "action": "rest",
-                    "target": "", "amount": rest_amount,
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2),
-                    "kappa_rest": round(self.kappa["rest"], 3)
-                })
-                self.state = "Idle" # 休息は1ターンで完了
+                self.log.append({"t": t, "name": self.name, "state": "Resting", "action": "rest", "target": "", "amount": rest_amount, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "kappa_rest": round(self.kappa["rest"], 3)})
+                self.state = "Idle"
                 return
 
-            # 採餌
             elif action == 'forage':
-                berry_nodes = self.env.nearest_nodes(self.pos(), self.env.berries, k=1)
-                if berry_nodes:
-                    node = berry_nodes[0]
-                    self.target_pos = node
-                    self.target_node = node
-                    self.state = "Moving"
-                    self.action_type = "forage"
+                nodes = self.env.nearest_nodes(self.pos(), self.env.berries, k=1)
+                if nodes:
+                    self.target_pos, self.target_node = nodes[0], nodes[0]
+                    self.state = "Moving"; self.action_type = "forage"
                     self.boredom = max(0, self.boredom - 10)
-                    self.do_forage(t) # 最初の移動ステップ
+                    self.do_forage(t) # ★修正: 即座に最初の移動を開始
                     return
 
-            # 狩猟
             elif action == 'hunt':
-                hunt_nodes = self.env.nearest_nodes(self.pos(), self.env.huntzones, k=1)
-                if hunt_nodes:
-                    node = hunt_nodes[0]
-                    self.target_pos = node
-                    self.target_node = node
-                    self.state = "Moving"
-                    self.action_type = "hunt"
+                nodes = self.env.nearest_nodes(self.pos(), self.env.huntzones, k=1)
+                if nodes:
+                    self.target_pos, self.target_node = nodes[0], nodes[0]
+                    self.state = "Moving"; self.action_type = "hunt"
                     self.boredom = max(0, self.boredom - 15)
-                    self.do_hunt(t) # 最初の移動ステップ
+                    self.do_hunt(t) # ★修正: 即座に最初の移動を開始
                     return
             
-            # 探索 (Patrol)
             elif action == 'patrol':
-                self.state = "Moving"
-                self.action_type = "patrol"
-                move_range = int(1 + self.T * 4) # Tが高いほど遠くへ
+                self.state = "Moving"; self.action_type = "patrol"
+                move_range = int(1 + self.T * 4)
                 tx = self.x + random.randint(-move_range, move_range)
                 ty = self.y + random.randint(-move_range, move_range)
                 self.target_pos = (max(0, min(self.env.size - 1, tx)), max(0, min(self.env.size - 1, ty)))
                 self.boredom = max(0, self.boredom - 20)
-                
-                self.update_heat(pressures.get('boredom',0), 0.1) # 探索は少しだけ圧力を処理
-                
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Patrol", "action": "patrol_start",
-                    "target": self.target_pos, "amount": 0,
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2),
-                    "boredom": round(self.boredom, 2)
-                })
+                self.update_heat(pressures.get('boredom',0), 0.1)
+                self.log.append({"t": t, "name": self.name, "state": "Patrol", "action": "patrol_start", "target": self.target_pos, "amount": 0, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2), "boredom": round(self.boredom, 2)})
                 self.move_towards(self.target_pos)
                 return
 
-            # 何もする行動が選ばれなかった場合 (フォールバック)
-            self.update_heat(total_pressure, 0) # 圧力が処理されずEが上昇
-            self.log.append({
-                "t": t, "name": self.name, "state": "Idle", "action": "idle",
-                "target": "", "amount": 0,
-                "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                "injury": round(self.injury, 1),
-                "E": round(self.E, 2), "T": round(self.T, 2)
-            })
+            # フォールバック
+            self.update_heat(sum(pressures.values()), 0)
+            self.log.append({"t": t, "name": self.name, "state": "Idle", "action": "idle", "target": "", "amount": 0, "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1), "injury": round(self.injury, 1), "E": round(self.E, 2), "T": round(self.T, 2)})
             return
 # ----------------------------------------------------------------------
 # 3. シミュレーション実行部と分析コード - 修正
