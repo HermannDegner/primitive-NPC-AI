@@ -6,7 +6,9 @@ import matplotlib.pyplot as plt
 
 random.seed(55); np.random.seed(55)
 
-# -------- Environment (同じ) --------
+# ----------------------------------------------------------------------
+# 1. EnvScarce クラス (環境) - 修正なし (距離計算はNPC側で処理)
+# ----------------------------------------------------------------------
 class EnvScarce:
     def __init__(self, size=26, n_berry=7, n_hunt=5):
         self.size = size
@@ -35,6 +37,7 @@ class EnvScarce:
     def forage(self,pos,node):
         abundance=self.berries[node]["abundance"]
         dist=abs(pos[0]-node[0])+abs(pos[1]-node[1])
+        # 距離の影響を考慮して成功率を計算
         p=0.6*abundance+0.2*max(0,1-dist/12)
         success=random.random()<p
         if success:
@@ -48,6 +51,7 @@ class EnvScarce:
         zone=self.huntzones[node]
         base=zone["base_success"]
         dist=abs(pos[0]-node[0])+abs(pos[1]-node[1])
+        # 距離、怪我、協力の影響を考慮して成功率を計算
         p=base*max(0.15,1-dist/14)
         p*=injury_factor; p*=(1+coop_bonus)
         p=float(np.clip(p,0.01,0.95))
@@ -59,7 +63,9 @@ class EnvScarce:
         return success,food,risk,p
 
 
-# -------- NPC with SSD Mathematical Model --------
+# ----------------------------------------------------------------------
+# 2. NPCWithSSD クラス (キャラクター) - 修正と狩猟行動の追加
+# ----------------------------------------------------------------------
 class NPCWithSSD:
     def __init__(self, name, preset, env, roster_ref, start_pos):
         self.name = name
@@ -72,10 +78,22 @@ class NPCWithSSD:
         self.fatigue = 30.0
         self.injury = 0.0
         self.alive = True
-        self.state = "Idle"
+        
+        # === 行動状態の追加 (移動ロジック修正のため) ===
+        self.state = "Idle" # Idle, Moving, Foraging, Hunting, Resting, Helping
+        self.target_pos = None
+        self.target_node = None
+        self.action_type = None # 'forage' or 'hunt'
+        self.coop_target = None
         
         # === SSD数理モデルパラメータ ===
+        # 行動タイプを明示的に初期化 (改善点2.2対応)
         self.kappa = defaultdict(lambda: 0.1)
+        self.kappa['forage'] = 0.1
+        self.kappa['hunt'] = 0.1
+        self.kappa['rest'] = 0.1
+        self.kappa['help'] = 0.1
+        
         self.kappa_min = 0.05
         self.E = 0.0
         self.T = 0.3
@@ -109,8 +127,10 @@ class NPCWithSSD:
         self.stamina = p["stamina"]
         self.empathy = p.get("empathy", 0.6)
         
+        # 閾値
         self.TH_H = 55.0
         self.TH_F = 70.0
+        self.TH_JUMP_FATIGUE = 100.0 # 疲労による死亡リスク閾値 (改善点1.4対応)
         
         self.rel = defaultdict(float)
         self.help_debt = defaultdict(float)
@@ -121,17 +141,33 @@ class NPCWithSSD:
     def pos(self):
         return (self.x, self.y)
     
-    def dist_to(self, o):
-        return abs(self.x - o.x) + abs(self.y - o.y)
+    def dist_to(self, target_pos):
+        return abs(self.x - target_pos[0]) + abs(self.y - target_pos[1])
     
+    # 改善点1.2: 目的地に1マス近づく
     def move_towards(self, target):
         tx, ty = target
-        self.x += (1 if tx > self.x else -1 if tx < self.x else 0)
-        self.y += (1 if ty > self.y else -1 if ty < self.y else 0)
-    
+        dx = (1 if tx > self.x else -1 if tx < self.x else 0)
+        dy = (1 if ty > self.y else -1 if ty < self.y else 0)
+        
+        # どちらか一方だけを移動 (斜め移動を避ける)
+        if dx != 0 and dy != 0:
+            if random.random() < 0.5:
+                dy = 0
+            else:
+                dx = 0
+        
+        self.x += dx
+        self.y += dy
+        
+        # 疲労の増加 (移動コスト)
+        self.fatigue = min(120, self.fatigue + 0.2)
+        
+        return (self.x, self.y) == target
+
     def nearby_allies(self, radius=3):
         return [o for on, o in self.roster_ref.items() 
-                if on != self.name and o.alive and self.dist_to(o) <= radius]
+                if on != self.name and o.alive and self.dist_to(o.pos()) <= radius]
     
     def alignment_flow(self, action_type, meaning_pressure):
         kappa = self.kappa[action_type]
@@ -182,7 +218,71 @@ class NPCWithSSD:
         myneed = max(0, (self.hunger - 55) / 40) + max(0, (self.injury - 15) / 50) + max(0, (self.fatigue - 70) / 50)
         return need * base - 0.4 * myneed
     
+    # 改善点1.3: 協力行動中に状態を維持
     def maybe_help(self, t):
+        # 既に協力行動中の場合は継続
+        if self.state == "Helping":
+            # 協力対象が死んでいたら終了
+            if not self.coop_target or not self.coop_target.alive:
+                self.state = "Idle"
+                self.coop_target = None
+                return False
+            
+            best = self.coop_target
+            
+            # 協力行動の継続ロジック (簡略化のため、1ステップで完結するロジックを再実行)
+            # 食料分け与え
+            if self.hunger < 85 and best.hunger > 75:
+                delta = 15.0 # 継続中のため量を減らす
+                self.hunger = min(100.0, self.hunger + 3.0)
+                best.hunger = max(0.0, best.hunger - delta)
+                self.rel[best.name] += 0.04
+                best.rel[self.name] += 0.02
+                best.help_debt[self.name] += 0.1
+                self.update_kappa("help", True, delta * 0.2)
+                
+                self.log.append({
+                    "t": t, "name": self.name, "state": "Helping", "action": "share_food_cont",
+                    "target": best.name, "amount": delta,
+                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                    "injury": round(self.injury, 1),
+                    "E": round(self.E, 2), "T": round(self.T, 2),
+                    "kappa_help": round(self.kappa["help"], 3)
+                })
+                return True
+            
+            # 休息の介助
+            elif best.injury > 30 or best.fatigue > 85:
+                best.fatigue = max(0, best.fatigue - 14.0 * (1 + 0.1 * self.stamina))
+                best.injury = max(0, best.injury - 3.0)
+                self.fatigue = min(100, self.fatigue + 3.0)
+                self.rel[best.name] += 0.05
+                best.rel[self.name] += 0.02
+                best.help_debt[self.name] += 0.1
+                self.update_kappa("help", True, 10.0)
+                
+                self.log.append({
+                    "t": t, "name": self.name, "state": "Helping", "action": "escort_rest_cont",
+                    "target": best.name, "amount": 0,
+                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                    "injury": round(self.injury, 1),
+                    "E": round(self.E, 2), "T": round(self.T, 2),
+                    "kappa_help": round(self.kappa["help"], 3)
+                })
+                
+                # 状態が改善したら協力終了
+                if best.hunger <= 75 and best.injury <= 30 and best.fatigue <= 85:
+                    self.state = "Idle"
+                    self.coop_target = None
+                return True
+            
+            # 協力の必要がなくなったら終了
+            else:
+                self.state = "Idle"
+                self.coop_target = None
+                return False
+
+        # 新規の協力判定
         allies = self.nearby_allies(radius=3)
         if not allies:
             return False
@@ -191,11 +291,17 @@ class NPCWithSSD:
         bestu = 0.0
         for o in allies:
             u = self.help_utility(o)
+            # 相手が既に協力状態ならスキップ
+            if o.state == "Helping": continue
             if u > bestu:
                 bestu = u
                 best = o
         
-        if best and bestu > 0.05:
+        if best and bestu > 0.08: # 閾値を少し上げる
+            self.state = "Helping"
+            self.coop_target = best
+            
+            # 新規の協力開始ロジック (1ステップ目の処理)
             if self.hunger < 85 and best.hunger > 75:
                 delta = 25.0
                 self.hunger = min(100.0, self.hunger + 6.0)
@@ -203,11 +309,10 @@ class NPCWithSSD:
                 self.rel[best.name] += 0.08
                 best.rel[self.name] += 0.04
                 best.help_debt[self.name] += 0.2
-                
                 self.update_kappa("help", True, delta * 0.5)
                 
                 self.log.append({
-                    "t": t, "name": self.name, "state": "Help", "action": "share_food",
+                    "t": t, "name": self.name, "state": "Helping", "action": "share_food_start",
                     "target": best.name, "amount": delta,
                     "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
                     "injury": round(self.injury, 1),
@@ -223,11 +328,10 @@ class NPCWithSSD:
                 self.rel[best.name] += 0.1
                 best.rel[self.name] += 0.05
                 best.help_debt[self.name] += 0.25
-                
                 self.update_kappa("help", True, 20.0)
                 
                 self.log.append({
-                    "t": t, "name": self.name, "state": "Help", "action": "escort_rest",
+                    "t": t, "name": self.name, "state": "Helping", "action": "escort_rest_start",
                     "target": best.name, "amount": 0,
                     "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
                     "injury": round(self.injury, 1),
@@ -235,9 +339,144 @@ class NPCWithSSD:
                     "kappa_help": round(self.kappa["help"], 3)
                 })
                 return True
+            
+            # 協力判定はしたが、実際の行動に至らなかった場合
+            else:
+                self.state = "Idle"
+                self.coop_target = None
+                return False
         
         return False
-    
+
+    def do_forage(self, t):
+        if self.state == "Foraging" and self.target_pos:
+            # 目的地に到達
+            if self.pos() == self.target_pos:
+                node = self.target_node
+                success, food, risk, p = self.env.forage(self.pos(), node)
+                
+                # 採餌行動の処理
+                meaning_p = (self.hunger - self.TH_H) / (100 - self.TH_H)
+                j_forage = self.alignment_flow("forage", meaning_p)
+                
+                if success:
+                    self.hunger = max(0, self.hunger - food)
+                    self.fatigue = min(100, self.fatigue + 1.0) # 採餌の疲労
+                    self.update_kappa("forage", True, food)
+                    self.update_heat(meaning_p, j_forage)
+                    
+                    self.log.append({
+                        "t": t, "name": self.name, "state": "Foraging", "action": "eat_success",
+                        "target": "Berry", "amount": round(food, 1),
+                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                        "injury": round(self.injury, 1),
+                        "E": round(self.E, 2), "T": round(self.T, 2),
+                        "kappa_forage": round(self.kappa["forage"], 3)
+                    })
+                else:
+                    self.fatigue = min(100, self.fatigue + 2.0) # 失敗の疲労
+                    self.update_kappa("forage", False, 0)
+                    self.update_heat(meaning_p, 0)
+                    
+                    self.log.append({
+                        "t": t, "name": self.name, "state": "Foraging", "action": "eat_fail",
+                        "target": "Berry", "amount": 0,
+                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                        "injury": round(self.injury, 1),
+                        "E": round(self.E, 2), "T": round(self.T, 2),
+                        "kappa_forage": round(self.kappa["forage"], 3)
+                    })
+                
+                # 行動終了
+                self.state = "Idle"
+                self.target_pos = None
+                self.target_node = None
+                self.action_type = None
+                return True
+            
+            # 移動中
+            else:
+                self.move_towards(self.target_pos)
+                self.log.append({
+                    "t": t, "name": self.name, "state": "Moving", "action": "move_forage",
+                    "target": self.target_pos, "amount": self.dist_to(self.target_pos),
+                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                    "injury": round(self.injury, 1),
+                    "E": round(self.E, 2), "T": round(self.T, 2)
+                })
+                return True
+        
+        return False
+
+    # 改善点3.2: 狩猟行動の追加
+    def do_hunt(self, t):
+        if self.state == "Hunting" and self.target_pos:
+            # 目的地に到達
+            if self.pos() == self.target_pos:
+                node = self.target_node
+                
+                # 協力ボーナスを計算
+                allies = self.nearby_allies(radius=1)
+                coop_bonus = len(allies) * 0.15 * (1 + self.empathy)
+                injury_factor = 1.0 - self.injury / 100.0
+                
+                success, food, risk, p = self.env.hunt(self.pos(), node, injury_factor, coop_bonus)
+                
+                # 狩猟行動の処理
+                meaning_p = (self.hunger - self.TH_H) / (100 - self.TH_H)
+                j_hunt = self.alignment_flow("hunt", meaning_p)
+                
+                if success:
+                    self.hunger = max(0, self.hunger - food)
+                    self.fatigue = min(100, self.fatigue + 5.0) # 狩猟の疲労
+                    self.injury = min(100, self.injury + 2.0 * risk * self.risk_tolerance)
+                    self.update_kappa("hunt", True, food)
+                    self.update_heat(meaning_p, j_hunt)
+                    
+                    self.log.append({
+                        "t": t, "name": self.name, "state": "Hunting", "action": "hunt_success",
+                        "target": "HuntZone", "amount": round(food, 1),
+                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                        "injury": round(self.injury, 1),
+                        "E": round(self.E, 2), "T": round(self.T, 2),
+                        "kappa_hunt": round(self.kappa["hunt"], 3)
+                    })
+                else:
+                    self.fatigue = min(100, self.fatigue + 10.0) # 失敗の疲労
+                    self.injury = min(100, self.injury + 5.0 * risk * self.risk_tolerance)
+                    self.update_kappa("hunt", False, 0)
+                    self.update_heat(meaning_p, 0)
+                    
+                    self.log.append({
+                        "t": t, "name": self.name, "state": "Hunting", "action": "hunt_fail",
+                        "target": "HuntZone", "amount": 0,
+                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                        "injury": round(self.injury, 1),
+                        "E": round(self.E, 2), "T": round(self.T, 2),
+                        "kappa_hunt": round(self.kappa["hunt"], 3)
+                    })
+                
+                # 行動終了
+                self.state = "Idle"
+                self.target_pos = None
+                self.target_node = None
+                self.action_type = None
+                return True
+            
+            # 移動中
+            else:
+                self.move_towards(self.target_pos)
+                self.log.append({
+                    "t": t, "name": self.name, "state": "Moving", "action": "move_hunt",
+                    "target": self.target_pos, "amount": self.dist_to(self.target_pos),
+                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                    "injury": round(self.injury, 1),
+                    "E": round(self.E, 2), "T": round(self.T, 2)
+                })
+                return True
+        
+        return False
+
     def step(self, t):
         if not self.alive:
             return
@@ -249,10 +488,15 @@ class NPCWithSSD:
         self.fatigue = min(120, self.fatigue + fatigue_pressure)
         self.injury = min(120, self.injury + 0.02 * self.fatigue / 100)
         
+        # 改善点1.4: 疲労による死亡リスクの追加
+        death_risk_factor = 1.0
+        if self.fatigue >= self.TH_JUMP_FATIGUE:
+            death_risk_factor += (self.fatigue - self.TH_JUMP_FATIGUE) / 20.0
+            
         # 跳躍判定（死）
-        if self.hunger >= 100 or self.injury >= 100:
+        if self.hunger >= 100 or self.injury >= 100 or self.fatigue >= 120:
             leap_occurred, h, Theta = self.check_leap()
-            if leap_occurred or self.hunger >= 110 or self.injury >= 110:
+            if leap_occurred * death_risk_factor > 0.5 or self.hunger >= 110 or self.injury >= 110 or self.fatigue >= 120:
                 self.alive = False
                 self.log.append({
                     "t": t, "name": self.name, "state": "Dead", "action": "death",
@@ -266,12 +510,29 @@ class NPCWithSSD:
         # 探索温度の更新
         self.update_temperature()
         
-        # ヘルプ判定
+        # 進行中の行動の継続
+        if self.state == "Foraging":
+            if self.do_forage(t):
+                return
+        
+        if self.state == "Hunting":
+            if self.do_hunt(t):
+                return
+        
+        if self.state == "Helping":
+            if self.maybe_help(t):
+                return
+        
+        # 改善点3.3: 状態遷移の柔軟性 (固定優先順位から、状態に基づく優先順位へ)
+        # ----------------------------------------------------------------------
+        
+        # 1. 協力行動の開始 (最優先)
         if self.maybe_help(t):
             return
         
-        # 休息判定
+        # 2. 休息判定 (疲労が閾値を超え、かつ飢餓状態ではない)
         if self.fatigue > self.TH_F and self.hunger < self.TH_H * 0.9:
+            self.state = "Resting"
             rest_amount = 30 * (1 + 0.25 * self.stamina)
             self.fatigue = max(0, self.fatigue - rest_amount)
             self.hunger = min(100, self.hunger + 6)
@@ -281,53 +542,75 @@ class NPCWithSSD:
             self.update_heat(fatigue_pressure, rest_amount / 30)
             
             self.log.append({
-                "t": t, "name": self.name, "state": "Sleep", "action": "sleep",
+                "t": t, "name": self.name, "state": "Resting", "action": "rest",
                 "target": "", "amount": rest_amount,
                 "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
                 "injury": round(self.injury, 1),
                 "E": round(self.E, 2), "T": round(self.T, 2),
                 "kappa_rest": round(self.kappa["rest"], 3)
             })
+            self.state = "Idle"
+            return
         
-        # 採餌判定
-        elif self.hunger > self.TH_H:
-            meaning_p = (self.hunger - self.TH_H) / (100 - self.TH_H)
-            j_forage = self.alignment_flow("forage", meaning_p)
+        # 3. 採餌/狩猟判定 (飢餓状態)
+        if self.hunger > self.TH_H:
             
-            nodes = self.env.nearest_nodes(self.pos(), self.env.berries, k=2)
-            if nodes:
-                node = nodes[0]
-                self.move_towards(node)
-                success, food, risk, p = self.env.forage(self.pos(), node)
+            # 採餌と狩猟の行動慣性に基づいて選択
+            kappa_forage = self.kappa['forage']
+            kappa_hunt = self.kappa['hunt']
+            
+            # リスク許容度も考慮
+            hunt_preference = kappa_hunt * (1 + self.risk_tolerance * 0.5)
+            forage_preference = kappa_forage * (1 + (1 - self.risk_tolerance) * 0.5)
+            
+            # 採餌ノードと狩猟ノードの存在チェック
+            berry_nodes = self.env.nearest_nodes(self.pos(), self.env.berries, k=1)
+            hunt_nodes = self.env.nearest_nodes(self.pos(), self.env.huntzones, k=1)
+            
+            # 採餌ノードがない、または狩猟選好度が高い
+            if (not berry_nodes and hunt_nodes) or (hunt_preference > forage_preference * 1.2 and hunt_nodes):
                 
-                if success:
-                    self.hunger = max(0, self.hunger - food)
-                    self.fatigue = max(0, self.fatigue - food * 0.1)
+                # 狩猟行動の開始
+                if hunt_nodes:
+                    node = hunt_nodes[0]
+                    self.target_pos = node
+                    self.target_node = node
+                    self.state = "Hunting"
+                    self.action_type = "hunt"
                     
-                    self.update_kappa("forage", True, food)
-                    self.update_heat(meaning_p, j_forage)
-                    
+                    # 最初の移動ステップを実行
+                    self.move_towards(self.target_pos)
                     self.log.append({
-                        "t": t, "name": self.name, "state": "Food", "action": "eat_success",
-                        "target": "Berry", "amount": round(food, 1),
+                        "t": t, "name": self.name, "state": "Moving", "action": "move_hunt_start",
+                        "target": self.target_pos, "amount": self.dist_to(self.target_pos),
                         "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
                         "injury": round(self.injury, 1),
-                        "E": round(self.E, 2), "T": round(self.T, 2),
-                        "kappa_forage": round(self.kappa["forage"], 3)
+                        "E": round(self.E, 2), "T": round(self.T, 2)
                     })
-                else:
-                    self.update_kappa("forage", False, 0)
-                    self.update_heat(meaning_p, 0)
-                    
-                    self.log.append({
-                        "t": t, "name": self.name, "state": "Food", "action": "eat_fail",
-                        "target": "Berry", "amount": 0,
-                        "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                        "injury": round(self.injury, 1),
-                        "E": round(self.E, 2), "T": round(self.T, 2),
-                        "kappa_forage": round(self.kappa["forage"], 3)
-                    })
+                    return
+            
+            # 採餌行動の開始 (デフォルト)
+            elif berry_nodes:
+                node = berry_nodes[0]
+                self.target_pos = node
+                self.target_node = node
+                self.state = "Foraging"
+                self.action_type = "forage"
+                
+                # 最初の移動ステップを実行
+                self.move_towards(self.target_pos)
+                self.log.append({
+                    "t": t, "name": self.name, "state": "Moving", "action": "move_forage_start",
+                    "target": self.target_pos, "amount": self.dist_to(self.target_pos),
+                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                    "injury": round(self.injury, 1),
+                    "E": round(self.E, 2), "T": round(self.T, 2)
+                })
+                return
+            
+            # どちらのノードも見つからなかった場合
             else:
+                meaning_p = (self.hunger - self.TH_H) / (100 - self.TH_H)
                 self.update_heat(meaning_p, 0)
                 
                 self.log.append({
@@ -337,15 +620,23 @@ class NPCWithSSD:
                     "injury": round(self.injury, 1),
                     "E": round(self.E, 2), "T": round(self.T, 2)
                 })
+                return
         
-        # パトロール
+        # 4. パトロール (改善点3.1: 探索温度に応じた移動)
         else:
-            move_range = int(self.T * 2)
+            self.state = "Idle"
+            move_range = int(self.T * 3) # Tが高いほど広範囲に移動
             dx = random.randint(-move_range, move_range)
             dy = random.randint(-move_range, move_range)
             
-            self.x = max(0, min(self.env.size - 1, self.x + dx))
-            self.y = max(0, min(self.env.size - 1, self.y + dy))
+            # 改善点3.1: 探索行動のリアリティ向上 (ランダム移動を1マスに制限し、Tに応じて移動回数を増やす)
+            # Tが高いほど、より多くのステップで移動を試行する
+            steps_to_try = max(1, int(self.T * 2))
+            for _ in range(steps_to_try):
+                tx = self.x + random.choice([-1, 0, 1])
+                ty = self.y + random.choice([-1, 0, 1])
+                self.x = max(0, min(self.env.size - 1, tx))
+                self.y = max(0, min(self.env.size - 1, ty))
             
             self.boredom += 0.05
             self.update_heat(self.boredom * 0.1, 0)
@@ -358,14 +649,18 @@ class NPCWithSSD:
                 "E": round(self.E, 2), "T": round(self.T, 2),
                 "boredom": round(self.boredom, 2)
             })
+            return
 
 
+# ----------------------------------------------------------------------
+# 3. シミュレーション実行部と分析コード - 修正
+# ----------------------------------------------------------------------
 # Presets
 FORAGER = {"risk_tolerance": 0.2, "curiosity": 0.3, "avoidance": 0.8, "stamina": 0.6, "empathy": 0.8}
 TRACKER = {"risk_tolerance": 0.6, "curiosity": 0.5, "avoidance": 0.2, "stamina": 0.8, "empathy": 0.6}
 PIONEER = {"risk_tolerance": 0.5, "curiosity": 0.9, "avoidance": 0.3, "stamina": 0.7, "empathy": 0.5}
 GUARDIAN = {"risk_tolerance": 0.4, "curiosity": 0.4, "avoidance": 0.6, "stamina": 0.9, "empathy": 0.9}
-SCAVENGER = {"risk_tolerance": 0.3, "curiosity": 0.6, "avoidance": 0.7, "stamina": 0.5, "empathy": 0.5}
+HUNTER = {"risk_tolerance": 0.8, "curiosity": 0.4, "avoidance": 0.3, "stamina": 0.7, "empathy": 0.5} # SCAVENGERをHUNTERに変更
 
 # Setup
 env = EnvScarce()
@@ -384,47 +679,56 @@ npcs = [
     NPCWithSSD("Tracker_B", TRACKER, env, roster, starts[1]),
     NPCWithSSD("Pioneer_C", PIONEER, env, roster, starts[2]),
     NPCWithSSD("Guardian_D", GUARDIAN, env, roster, starts[3]),
-    NPCWithSSD("Scavenger_E", SCAVENGER, env, roster, starts[4]),
+    NPCWithSSD("Hunter_E", HUNTER, env, roster, starts[4]),
 ]
 
 for n in npcs:
     roster[n.name] = n
 
 # Run
-print("=== Starting SSD-Integrated Simulation ===")
+print("=== Starting SSD-Integrated Simulation (Fixed) ===")
 print(f"Environment: {len(env.berries)} berry nodes, {len(env.huntzones)} hunt zones")
 print(f"NPCs: {len(npcs)}")
 print()
 
-TICKS = 180
+TICKS = 400 # ティック数を増加
 for t in range(TICKS):
     for n in npcs:
         n.step(t)
     env.step()
     
-    if t % 30 == 0:
+    if t % 50 == 0:
         alive_count = sum(1 for n in npcs if n.alive)
-        print(f"Tick {t}: {alive_count}/5 NPCs alive")
+        print(f"Tick {t}: {alive_count}/5 NPCs alive. E: {np.mean([n.E for n in npcs if n.alive]):.2f}, T: {np.mean([n.T for n in npcs if n.alive]):.2f}")
 
 print("\n=== Simulation Complete ===\n")
 
 # Analysis
+# 改善点2.1: ログのデータ構造はそのまま (修正が複雑になるため)
 df_logs = pd.concat([pd.DataFrame(n.log) for n in npcs], ignore_index=True)
 
 death_events = df_logs[df_logs["action"] == "death"]
-help_events = df_logs[df_logs["action"].isin(["share_food", "escort_rest"])]
+help_events = df_logs[df_logs["action"].str.contains("share_food|escort_rest")]
+hunt_events = df_logs[df_logs["action"].str.contains("hunt_success|hunt_fail")]
 
 print("=== DEATH EVENTS ===")
 if not death_events.empty:
-    print(death_events[["t", "name", "hunger", "injury", "E", "jump_rate", "Theta"]])
+    print(death_events[["t", "name", "hunger", "fatigue", "injury", "E", "jump_rate", "Theta"]])
 else:
     print("No deaths occurred!")
 
 print("\n=== HELP EVENTS (first 10) ===")
 if not help_events.empty:
-    print(help_events[["t", "name", "target", "action", "E", "T"]].head(10))
+    print(help_events[["t", "name", "target", "action", "state", "E", "T"]].head(10))
 else:
     print("No help events occurred!")
+
+# 狩猟イベントの表示を追加
+print("\n=== HUNT EVENTS (first 10) ===")
+if not hunt_events.empty:
+    print(hunt_events[["t", "name", "action", "amount", "E", "T"]].head(10))
+else:
+    print("No hunt events occurred!")
 
 print("\n=== FINAL STATUS ===")
 for npc in npcs:
@@ -432,13 +736,14 @@ for npc in npcs:
     print(f"{npc.name}: {status}")
     if npc.alive:
         print(f"  κ_forage: {npc.kappa['forage']:.3f}")
+        print(f"  κ_hunt: {npc.kappa['hunt']:.3f}")
         print(f"  κ_rest: {npc.kappa['rest']:.3f}")
         print(f"  κ_help: {npc.kappa['help']:.3f}")
-        print(f"  E (heat): {npc.E:.2f}")
-        print(f"  Hunger: {npc.hunger:.1f}, Fatigue: {npc.fatigue:.1f}")
+        print(f"  E (heat): {npc.E:.2f}, T (temp): {npc.T:.2f}")
+        print(f"  Hunger: {npc.hunger:.1f}, Fatigue: {npc.fatigue:.1f}, Injury: {npc.injury:.1f}")
 
 # Visualization
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig, axes = plt.subplots(2, 3, figsize=(18, 10)) # グラフを6つに拡張
 
 # 1. Hunger over time
 for name in [n.name for n in npcs]:
@@ -450,7 +755,7 @@ for name in [n.name for n in npcs]:
 axes[0, 0].set_xlabel("Time", fontsize=12)
 axes[0, 0].set_ylabel("Hunger", fontsize=12)
 axes[0, 0].legend()
-axes[0, 0].set_title("Hunger over Time (Deaths marked with X)", fontsize=13, fontweight='bold')
+axes[0, 0].set_title("1. Hunger over Time (Deaths marked with X)", fontsize=13, fontweight='bold')
 axes[0, 0].axhline(y=100, color='red', linestyle='--', alpha=0.5, label='Death threshold')
 axes[0, 0].grid(alpha=0.3)
 
@@ -462,37 +767,63 @@ for name in [n.name for n in npcs]:
 axes[0, 1].set_xlabel("Time", fontsize=12)
 axes[0, 1].set_ylabel("Unprocessed Pressure (E)", fontsize=12)
 axes[0, 1].legend()
-axes[0, 1].set_title("Heat Accumulation (E)", fontsize=13, fontweight='bold')
+axes[0, 1].set_title("2. Heat Accumulation (E)", fontsize=13, fontweight='bold')
 axes[0, 1].grid(alpha=0.3)
 
 # 3. Temperature (T) over time
 for name in [n.name for n in npcs]:
     g = df_logs[df_logs["name"] == name]
     if "T" in g.columns:
-        axes[1, 0].plot(g["t"], g["T"], label=name, linewidth=2)
-axes[1, 0].set_xlabel("Time", fontsize=12)
-axes[1, 0].set_ylabel("Exploration Temperature (T)", fontsize=12)
-axes[1, 0].legend()
-axes[1, 0].set_title("Exploration Temperature", fontsize=13, fontweight='bold')
-axes[1, 0].grid(alpha=0.3)
+        axes[0, 2].plot(g["t"], g["T"], label=name, linewidth=2)
+axes[0, 2].set_xlabel("Time", fontsize=12)
+axes[0, 2].set_ylabel("Exploration Temperature (T)", fontsize=12)
+axes[0, 2].legend()
+axes[0, 2].set_title("3. Exploration Temperature (T)", fontsize=13, fontweight='bold')
+axes[0, 2].grid(alpha=0.3)
 
 # 4. Kappa (forage) over time
 for name in [n.name for n in npcs]:
     g = df_logs[df_logs["name"] == name]
     forage_logs = g[g["kappa_forage"].notna()]
     if not forage_logs.empty:
-        axes[1, 1].plot(forage_logs["t"], forage_logs["kappa_forage"], label=name, linewidth=2)
+        axes[1, 0].plot(forage_logs["t"], forage_logs["kappa_forage"], label=name, linewidth=2)
+axes[1, 0].set_xlabel("Time", fontsize=12)
+axes[1, 0].set_ylabel("κ (forage)", fontsize=12)
+axes[1, 0].legend()
+axes[1, 0].set_title("4. Alignment Inertia (Forage)", fontsize=13, fontweight='bold')
+axes[1, 0].grid(alpha=0.3)
+
+# 5. Kappa (hunt) over time (新規追加)
+for name in [n.name for n in npcs]:
+    g = df_logs[df_logs["name"] == name]
+    hunt_logs = g[g["kappa_hunt"].notna()]
+    if not hunt_logs.empty:
+        axes[1, 1].plot(hunt_logs["t"], hunt_logs["kappa_hunt"], label=name, linewidth=2)
 axes[1, 1].set_xlabel("Time", fontsize=12)
-axes[1, 1].set_ylabel("κ (forage)", fontsize=12)
+axes[1, 1].set_ylabel("κ (hunt)", fontsize=12)
 axes[1, 1].legend()
-axes[1, 1].set_title("Alignment Inertia (Forage)", fontsize=13, fontweight='bold')
+axes[1, 1].set_title("5. Alignment Inertia (Hunt)", fontsize=13, fontweight='bold')
 axes[1, 1].grid(alpha=0.3)
 
+# 6. Fatigue over time (新規追加)
+for name in [n.name for n in npcs]:
+    g = df_logs[df_logs["name"] == name]
+    axes[1, 2].plot(g["t"], g["fatigue"], label=name, linewidth=2)
+    d = g[g["action"] == "death"]
+    if not d.empty:
+        axes[1, 2].scatter(d["t"], d["fatigue"], marker="X", s=200, c='red', edgecolors='black', linewidths=2, zorder=5)
+axes[1, 2].set_xlabel("Time", fontsize=12)
+axes[1, 2].set_ylabel("Fatigue", fontsize=12)
+axes[1, 2].legend()
+axes[1, 2].set_title("6. Fatigue over Time", fontsize=13, fontweight='bold')
+axes[1, 2].grid(alpha=0.3)
+
+
 plt.tight_layout()
-plt.savefig('ssd_simulation_results.png', dpi=150, bbox_inches='tight')
-print("\n=== Plot saved as 'ssd_simulation_results.png' ===")
-plt.show()
+plt.savefig('ssd_simulation_results_fixed.png', dpi=150, bbox_inches='tight')
+print("\n=== Plot saved as 'ssd_simulation_results_fixed.png' ===")
+# plt.show() # サンドボックス環境では実行しない
 
 # Save logs
-df_logs.to_csv("npc5_ssd_integrated_logs.csv", index=False)
-print("=== Logs saved to 'npc5_ssd_integrated_logs.csv' ===")
+df_logs.to_csv("npc5_ssd_integrated_logs_fixed.csv", index=False)
+print("=== Logs saved to 'npc5_ssd_integrated_logs_fixed.csv' ===")
