@@ -357,9 +357,22 @@ class NPCWithSSD:
         return False
 
     def do_forage(self, t):
-        if self.state == "Foraging" and self.target_pos:
-            # 目的地に到達
-            if self.pos() == self.target_pos:
+        # Moving/Foraging いずれでもハンドルする
+        if self.action_type == "forage" and self.target_pos:
+            # 未到着なら1マス前進
+            if self.pos() != self.target_pos:
+                self.move_towards(self.target_pos)
+                self.log.append({
+                    "t": t, "name": self.name, "state": "Moving", "action": "move_forage",
+                    "target": self.target_pos, "amount": self.dist_to(self.target_pos),
+                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
+                    "injury": round(self.injury, 1),
+                    "E": round(self.E, 2), "T": round(self.T, 2)
+                })
+                return True
+            else:
+                # 到着したら Foraging に遷移して実行
+                self.state = "Foraging"
                 node = self.target_node
                 success, food, risk, p = self.env.forage(self.pos(), node)
                 
@@ -401,26 +414,23 @@ class NPCWithSSD:
                 self.target_node = None
                 self.action_type = None
                 return True
-            
-            # 移動中
-            else:
+        return False
+
+    # 改善点3.2: 狩猟行動の追加
+    def do_hunt(self, t):
+        if self.action_type == "hunt" and self.target_pos:
+            if self.pos() != self.target_pos:
                 self.move_towards(self.target_pos)
                 self.log.append({
-                    "t": t, "name": self.name, "state": "Moving", "action": "move_forage",
+                    "t": t, "name": self.name, "state": "Moving", "action": "move_hunt",
                     "target": self.target_pos, "amount": self.dist_to(self.target_pos),
                     "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
                     "injury": round(self.injury, 1),
                     "E": round(self.E, 2), "T": round(self.T, 2)
                 })
                 return True
-        
-        return False
-
-    # 改善点3.2: 狩猟行動の追加
-    def do_hunt(self, t):
-        if self.state == "Hunting" and self.target_pos:
-            # 目的地に到達
-            if self.pos() == self.target_pos:
+            else:
+                self.state = "Hunting"
                 node = self.target_node
                 
                 # 協力ボーナスを計算
@@ -470,19 +480,6 @@ class NPCWithSSD:
                 self.target_node = None
                 self.action_type = None
                 return True
-            
-            # 移動中
-            else:
-                self.move_towards(self.target_pos)
-                self.log.append({
-                    "t": t, "name": self.name, "state": "Moving", "action": "move_hunt",
-                    "target": self.target_pos, "amount": self.dist_to(self.target_pos),
-                    "hunger": round(self.hunger, 1), "fatigue": round(self.fatigue, 1),
-                    "injury": round(self.injury, 1),
-                    "E": round(self.E, 2), "T": round(self.T, 2)
-                })
-                return True
-        
         return False
 
     # --- ここから理論準拠のための新メソッド群 ---
@@ -576,9 +573,9 @@ class NPCWithSSD:
         # 進行中の行動の継続 (移動など)
         if self.state == "Moving":
             if self.action_type == 'forage':
-                if self.do_forage(t): return
+                self.do_forage(t); return
             elif self.action_type == 'hunt':
-                if self.do_hunt(t): return
+                self.do_hunt(t); return
             else: # 探索などの移動
                 if self.pos() == self.target_pos: self.state = "Idle"
                 else: self.move_towards(self.target_pos)
@@ -745,8 +742,8 @@ print("\n=== Simulation Complete ===\n")
 df_logs = pd.concat([pd.DataFrame(n.log) for n in npcs], ignore_index=True)
 
 death_events = df_logs[df_logs["action"] == "death"]
-help_events = df_logs[df_logs["action"].str.contains("share_food|escort_rest")]
-hunt_events = df_logs[df_logs["action"].str.contains("hunt_success|hunt_fail")]
+help_events = df_logs[df_logs["action"].str.contains("share_food|escort_rest", na=False)]
+hunt_events = df_logs[df_logs["action"].str.contains("hunt_success|hunt_fail", na=False)]
 
 print("=== DEATH EVENTS ===")
 if not death_events.empty:
